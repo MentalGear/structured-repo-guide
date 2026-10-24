@@ -37,12 +37,18 @@ if grep -n '^| C04 .*trustPolicy' "$here/../../security/controls-table.md" "$her
 fi
 echo "  ok   no example table row states an unverified pnpm setting as enforced"
 
+step "the sample's copy of the runner is the shared one"
+cmp "$here/../gate-runner/run-gates.sh" "$here/sample/scripts/run-gates.sh"
+echo "  ok   examples/security/sample/scripts/run-gates.sh is byte-identical to examples/gate-runner/run-gates.sh"
+
 step "the sample tree: one runner, every gate"
 sh "$here/sample/scripts/run-gates.sh"
 
 step "the adopt path (security/README.md, steps 1 to 5) in a fresh git repository"
 tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"' EXIT INT TERM
+trap 'rm -rf "$tmp"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 guide=$(cd "$here/../.." && pwd)
 ad="$tmp/adopt"
 mkdir -p "$ad/scripts" "$ad/docs" "$tmp/remote"

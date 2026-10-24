@@ -30,7 +30,7 @@ one runner, the single command to run before a commit. The words **check**, **ga
 - Python 3.8 or newer for the documentation half, standard library only; the scripts are tested on 3.8 to 3.13. The
   security half's pin checker reads TOML and needs Python 3.11 or newer.
 - `git` for the adoption paths and the cleanup playbook (they use `git ls-files`, `git grep` and `git mv`); the scripts
-  themselves do not need it.
+  run without it, and use it when present so that `.gitignore` decides what they scan.
 - No network, no package install.
 
 ## Adopt both halves

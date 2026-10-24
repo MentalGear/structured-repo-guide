@@ -13,7 +13,7 @@ It is a standalone guide. Nothing in it depends on a particular language, framew
 - Python 3.8 or newer, standard library only; the scripts are tested on 3.8 to 3.13. (The security half's pin checker reads
   TOML and needs 3.11 or newer.)
 - `git`: the adoption path and the cleanup playbook use `git ls-files`, `git grep` and `git mv`, and the runner names the
-  commit it ran on. The scripts themselves do not need it.
+  commit it ran on. The scripts run without it, and use it when present so that `.gitignore` decides what they scan.
 - No network, no package install.
 
 ## Words used in this guide
@@ -122,7 +122,8 @@ Add `docs/checks.md` as a row of the map if it is not there (the sample map has 
 
 **5. Make the entry file and the status page yours, then run the runner.** Open `AGENTS.md`, `docs/STATUS.md` and
 `docs/decisions.md`: fill every `<placeholder>`, make each command and link true of your repository, delete the template
-comments. `check-placeholders` fails while one is left.
+comments. That includes the template comment at the top of the copied `docs/guides/history-in-comments.md`:
+`check-placeholders` finds a template comment in any Markdown file and fails while one is left.
 
 ```sh
 sh scripts/check-placeholders.sh                          # exit 0: no placeholder or template comment left
