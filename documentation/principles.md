@@ -89,7 +89,7 @@ Template: [`../templates/STATUS.md`](../templates/STATUS.md).
 
 ## 6. A decisions index
 
-A person's decision ("we do not ship an editor", "CI stays off until the tracker is empty") is easy to lose in a chat
+A person's decision ("we do not ship an editor", "releases wait for the owner's sign-off") is easy to lose in a chat
 or a thread. Keep one page, one line per decision: the decision, its date, and the item or doc that carries the reasoning.
 
 - Only current decisions are listed. A reversed decision leaves the page and stays in its item.

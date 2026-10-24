@@ -98,7 +98,7 @@ regression, so a living doc keeps its path and the headings that something cites
 - **Move with the link rewrite in the same commit.** `git mv`, then `sed` or a script over the citing files, then
   `git grep` again and confirm zero hits on the old path.
 - **Rename a heading only with its citations.** The link checker verifies `#anchor` links, so a renamed heading that a
-  doc links to goes red. Comments that cite a heading by name need a search: `git grep -n 'Gate procedure'`.
+  doc links to goes red. Comments that cite a heading by name need a search: `git grep -n '<heading text>'`.
 - **When you split a big doc, keep the old headings** in the file that stays, or leave a pointer where the heading was.
 - **Prefer ids to paths in code.** A comment that cites `backlog 312` survives any reorganisation of the docs. A comment
   that cites `docs/research/old/x.md` does not.

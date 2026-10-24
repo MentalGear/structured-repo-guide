@@ -10,15 +10,16 @@ It is a standalone guide. Nothing in it depends on a particular language, framew
 ## Prerequisites
 
 - `sh` (POSIX) and `awk`, both on every Unix.
-- Python 3.8 or newer, standard library only. The scripts are tested on 3.8, 3.9, 3.11, 3.12 and 3.13. (The security half's
-  pin checker reads TOML and needs 3.11.)
+- Python 3.8 or newer, standard library only; the scripts are tested on 3.8 to 3.13. (The security half's pin checker reads
+  TOML and needs 3.11 or newer.)
 - `git`: the adoption path and the cleanup playbook use `git ls-files`, `git grep` and `git mv`, and the runner names the
   commit it ran on. The scripts themselves do not need it.
 - No network, no package install.
 
 ## Words used in this guide
 
-Defined here once, used the same way everywhere.
+Defined here once, used the same way everywhere. Every other page of this guide uses these words as defined here and links to
+this table instead of defining them again.
 
 | Word | Meaning |
 |---|---|
@@ -59,7 +60,7 @@ Runnable code: [`../examples/documentation/`](../examples/documentation/README.m
 
 ## Adopt it in five minutes
 
-Starting point: a git repository with Python 3.8+ and a shell. Each step is a command you can run now; the sample under
+Starting point: a git repository with Python 3.8 or newer and a shell. Each step is a command you can run now; the sample under
 [`../examples/documentation/sample/`](../examples/documentation/sample/AGENTS.md) shows the result. Commit after step 5. If you
 have your own `scripts/check-*.sh`, give each a header and a line in `scripts/gates.list` too, or the runner refuses to run
 (that is its job: [`gate-runner.md`](./gate-runner.md)).
@@ -178,7 +179,7 @@ python3 -I examples/documentation/check_doc_links.py --skip templates      # run
 
 An agent entry file is the highest-leverage page in the repository, because it is read at the start of every session. The
 template [`../templates/AGENTS.md`](../templates/AGENTS.md) holds a screen of rules that apply to every change and pointers
-to the rest. Three habits keep agents and contributors aligned with the method:
+to the rest. Four habits keep agents and contributors aligned with the method:
 
 - Say in the entry file: "read the status page first".
 - Say: "run `sh scripts/run-gates.sh` before every commit; green is `ALL GREEN` and exit 0, and a partial run is not a pass".
