@@ -139,7 +139,7 @@ A repository that adopts both halves of this guide has one gate list and therefo
 wrappers are `check-history-comments.sh`, `check-comment-refs.sh`, `check-doc-links.sh`, `check-docs-catalogue.sh`,
 `check-backlog-index.sh`, `check-placeholders.sh`, `check-doc-map.sh` and `check-dated-headings.sh`; the security half's wrappers
 are `check-*.sh` as well. They sit in the same `scripts/`, are listed in the same `gates.list` under their own `# group:`
-headings (`Documentation`, `Supply chain`), and appear on `docs/checks.md` under those headings in the list's order.
+headings (`Documentation`, `Security`), and appear on `docs/checks.md` under those headings in the list's order.
 
 The glob never picks up the other half wrongly because the glob is `scripts/check-*.sh`: Python tools, whichever half they
 belong to, are not catalogued unless a gate names them, and a wrapper's header (not its Python tool's docstring) is what the page

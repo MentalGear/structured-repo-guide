@@ -4,15 +4,15 @@
 for everything new and patient with what exists, and the allowed debt can only go down. Use it for any check where a
 sweep would be too big to do in one change.
 
-Two words, used throughout this guide. A **baseline** is a committed file that records the violations that exist today. A
-**ratchet** is a check that compares the tree with a baseline, accepts exactly what the baseline records, and forces the
-baseline to shrink as the debt is paid.
+The words **baseline** and **ratchet** are defined in [Words used in this guide](./README.md#words-used-in-this-guide). In
+short: a ratchet compares the tree with a baseline, accepts exactly what the baseline records, and forces the baseline to
+shrink as the debt is paid.
 
 ## Contents
 
 - [The pattern](#the-pattern)
 - [The four rules](#the-four-rules)
-- [Three kinds of baseline](#three-kinds-of-baseline)
+- [Kinds of baseline, and when a budget is not one](#kinds-of-baseline-and-when-a-budget-is-not-one)
 - [Markers with reasons](#markers-with-reasons)
 - [A minimal ratchet in shell](#a-minimal-ratchet-in-shell)
 - [The check proves it can fail](#the-check-proves-it-can-fail)
@@ -44,20 +44,26 @@ The debt is visible (it is a file in the repository), measurable (it is a number
 
 All four are tested by the check's `--self-test`: it builds a tree for each rule and requires the right result.
 
-## Three kinds of baseline
+## Kinds of baseline, and when a budget is not one
 
 | Kind | Entry | Example | Fails when |
 |---|---|---|---|
-| **Count per file** | `path<TAB>count` | History lines per source file | A count rises, a new file has any, or a count fell. |
-| **Set of entries** | `file<TAB>kind<TAB>ref` | Dead citations in comments | An entry appears that is not in the set, or an entry in the set no longer occurs. |
-| **A budget number** | `total` | Total test seconds, total KB of docs | The measured total exceeds the budget. Raising it is a one-number diff that states why. |
+| **Count per file** (ratchet) | `path<TAB>count` | History lines per source file | A count rises, a new file has any, or a count fell. |
+| **Set of entries** (ratchet) | `file<TAB>kind<TAB>ref` | Dead citations in comments | An entry appears that is not in the set, or an entry in the set no longer occurs. |
+| **Budget number** (not a ratchet) | `total` | Total test seconds, total KB of docs | The measured total exceeds the budget. Raising it is a one-number diff that states why. |
 
 Choose the kind by what a fix looks like:
 
 - If one violation can be fixed alone, use a **set**. It is exact.
 - If violations are interchangeable and only how many matters, use a **count per file**. It conflicts less in review,
   because unrelated edits do not change it.
-- If the thing is a quantity, not a list, use a **budget**.
+- If the thing is a quantity that is legitimately above zero, not a list of violations, use a **budget**.
+
+A budget is not a ratchet. A ratchet only moves down: it also fails when the number could shrink and has not, so there is no
+headroom to fill. A budget fails only above the cap, so the gap below the cap is room for the quantity to creep back up.
+The guide's recommendation is a ratchet (count or set) for any debt that should reach zero, and a budget only for a quantity
+that cannot, where raising the cap is a deliberate one-number decision with its reason in the commit. A budget is never the
+way to carry violations of a rule.
 
 Never store line numbers. They shift on every edit, so the baseline would go red on unrelated changes.
 

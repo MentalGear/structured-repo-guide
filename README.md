@@ -9,9 +9,9 @@ A language-agnostic guide to keeping a repository structured, in two halves:
   model, a controls table that a script keeps true, vulnerability reporting, and rules for automated agents.
 
 Both halves follow one principle: when a problem shows up twice it is a class, so fix it with a check that makes the
-class unable to recur, and put the existing debt in a **baseline** (a committed file recording the violations that exist
-today) that can only shrink. A check that works this way is a **ratchet**. Every check runs from one **runner**
-([`documentation/gate-runner.md`](./documentation/gate-runner.md)), the single command to run before a commit.
+class unable to recur, and put the existing debt in a baseline that can only shrink (a ratchet). Every check runs from
+one runner, the single command to run before a commit. The words **check**, **gate**, **runner**, **baseline** and
+**ratchet** are defined once, in [Words used in this guide](./documentation/README.md#words-used-in-this-guide).
 
 ## Start here
 
@@ -27,8 +27,8 @@ today) that can only shrink. A check that works this way is a **ratchet**. Every
 ## Prerequisites
 
 - `sh` (POSIX) and `awk`.
-- Python 3.8 or newer for the documentation half, standard library only. The security half's pin checker reads TOML and
-  needs Python 3.11 or newer.
+- Python 3.8 or newer for the documentation half, standard library only; the scripts are tested on 3.8 to 3.13. The
+  security half's pin checker reads TOML and needs Python 3.11 or newer.
 - `git` for the adoption paths and the cleanup playbook (they use `git ls-files`, `git grep` and `git mv`); the scripts
   themselves do not need it.
 - No network, no package install.
@@ -59,7 +59,7 @@ Step by step: documentation's [five minutes](./documentation/README.md#adopt-it-
 
 ## Run the examples
 
-Everything runnable needs only `sh`, `awk` and Python 3 (3.8 or newer; 3.11 or newer for the security pin checker, which
+Everything runnable needs only `sh`, `awk` and Python 3 (3.8 to 3.13; 3.11 or newer for the security pin checker, which
 reads TOML):
 
 ```sh
