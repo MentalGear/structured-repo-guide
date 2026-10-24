@@ -3,19 +3,20 @@
 **What this is for.** Small, runnable scripts that enforce the rules in [`../../documentation/`](../../documentation/README.md),
 and a sample tree to run them against. Copy the scripts into your repository's `scripts/` directory, or read them as
 the reference implementation and port the idea. They need only `sh`, `awk` and Python 3.8 or newer (standard library). No
-network, no install, no git. The runner they plug into is in [`../gate-runner/`](../gate-runner/README.md).
+network, no install. `git` is optional: inside a git work tree the comment scans take the file list from git (so an ignored
+virtualenv or build tree is never read), and elsewhere they walk the tree. The runner they plug into is in [`../gate-runner/`](../gate-runner/README.md).
 
 ## What is here
 
 | File | What it does | Guide |
 |---|---|---|
-| `comment_scan.py` | One comment extractor behind two checks: `history` (a per-file ratchet on comment lines that retell history) and `refs` (every cited tracker id and repository path resolves). | [history in comments](../../documentation/history-in-comments.md), [ratchets](../../documentation/ratchets.md) |
+| `comment_scan.py` | One comment extractor behind two checks: `history` (a per-file ratchet on comment lines that retell history) and `refs` (every cited tracker id and repository path resolves). The comment syntax is found by file extension, then by file name (`Makefile`, `Dockerfile`), then by the `#!` line of an extensionless script; add a row to its `SYNTAX`, `FILENAMES` or `SHEBANGS` table for another language. | [history in comments](../../documentation/history-in-comments.md), [ratchets](../../documentation/ratchets.md) |
 | `check-history-comments.sh` | Wrapper: `comment_scan.py history`. | |
 | `check-comment-refs.sh` | Wrapper: `comment_scan.py refs`. | |
 | `check_doc_links.py`, `check-doc-links.sh` | Every relative Markdown link, and every `#anchor`, resolves. | [layout](../../documentation/layout.md#keeping-cited-paths-and-headings-stable) |
 | `docs_catalogue.py`, `check-docs-catalogue.sh` | Generates a catalogue page from the runner's gate list and the header of each check script (or from a glob of scripts); `--check` is the freshness check. | [generated docs](../../documentation/generated-docs.md) |
 | `backlog_index.py`, `check-backlog-index.sh` | A tracker of one file per item with generated open and done indexes; `--check` enforces front matter, ids, folders and freshness. | [tracker as files](../../documentation/tracker-as-files.md) |
-| `doc_hygiene.py`, `check-placeholders.sh`, `check-doc-map.sh`, `check-dated-headings.sh` | Three small checks over the Markdown docs: no placeholder or template comment left in a copied template; every doc under `docs/` reachable from the map; a ratchet on dated headings and dated lead-ins in living docs. | [layout](../../documentation/layout.md#the-map-file), [cleanup playbook](../../documentation/cleanup-playbook.md) |
+| `doc_hygiene.py`, `check-placeholders.sh`, `check-doc-map.sh`, `check-dated-headings.sh` | Three small checks over the Markdown docs: no placeholder or template comment left in a copied template (the template comment is looked for in every Markdown file, so a copied guide or item cannot keep its instructions unseen); every doc under `docs/` reachable from the map; a ratchet on dated headings and dated lead-ins in living docs. | [layout](../../documentation/layout.md#the-map-file), [cleanup playbook](../../documentation/cleanup-playbook.md) |
 | `run-all.sh` | Runs every self-test, then every check on the sample, then the sample's own runner. Prints `ALL GREEN` and exits 0 when all hold. | |
 | `sample/` | A tiny repository: source in five languages, a tracker, a status page, a generated catalogue, an archive, baselines, and a copy of the gate runner with its list. | |
 

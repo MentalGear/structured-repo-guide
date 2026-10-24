@@ -37,7 +37,7 @@ RETRIES = 2
 | Instead of | Write |
 |---|---|
 | `no longer uses the shared timer` | What it uses. The item says what it stopped using. |
-| `fixed in 98e7ca1b`, `was fixed in 1.4` | `(backlog 245)`. The item carries the commit and the version. |
+| `fixed in 3fa9c21b`, `was fixed in 1.4` | `(backlog 245)`. The item carries the commit and the version. |
 | `previously this took the first child; now it reads the registered item` | `reads the registered item, so a wrapper element cannot be mistaken for the first child` |
 | `TODO: tidy this up after the rewrite` | `TODO(backlog 31): tidy this up`. A TODO names its item. |
 
@@ -49,7 +49,8 @@ revision, and a date the code itself needs (a fixture, a certificate expiry).
 - `scripts/check-history-comments.sh` counts the comment lines that carry a date, a commit hash or a phrase that narrates a
   change, per file, against `scripts/baselines/history-comments.tsv`. A new one fails. A file that got cleaner must be locked in:
   `sh scripts/check-history-comments.sh --update-baseline`, committed with the change.
-- `scripts/check-comment-refs.sh` fails when a comment cites an item id or a path that does not exist.
+- `scripts/check-comment-refs.sh` fails when a comment cites an item id, or a path that starts at a top-level directory
+  (or is written `./file`), that does not exist.
 - A line that is history on purpose (a quoted upstream changelog) ends with `history-ok: <reason>`; a deliberate dead
   citation with `ref-ok: <reason>`. A marker without a reason exempts nothing.
 - A pattern that fires on an innocent sentence is a bug in `scripts/comment_scan.py`: fix the pattern and add the sentence to

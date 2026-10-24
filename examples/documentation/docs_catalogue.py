@@ -335,7 +335,7 @@ def self_test():
              "# because tab width differs by editor and the diff then lies about alignment.\nexit 0\n")
     lpins = ("#!/bin/sh\n#\n# Fails when a dependency is declared with a version range instead of an exact pin, because a range\n"
              "# lets the next install resolve to code nobody reviewed.\nexit 0\n")
-    glist = ("# group: Hygiene\ncheck-a|sh scripts/check-a.sh\n# group: Supply chain\ncheck-pins|sh scripts/check-pins.sh --strict\n"
+    glist = ("# group: Hygiene\ncheck-a|sh scripts/check-a.sh\n# group: Security\ncheck-pins|sh scripts/check-pins.sh --strict\n"
              "# group: Build\n# Formats every source file with the project formatter and fails on any difference, because\n"
              "# unformatted code makes every diff noisy.\nfmt|cargo fmt --check\n# Runs the whole test suite, which takes minutes.\n"
              "# It is the slow gate.\ntest slow|cargo test\n")
@@ -380,7 +380,7 @@ def self_test():
         if not ok:
             print("    " + out.replace("\n", "\n    "))
     rc, _, page = lattempt(lbase, "--write")
-    order = [page.find(h) for h in ("## Hygiene", "## Supply chain", "## Build")]
+    order = [page.find(h) for h in ("## Hygiene", "## Security", "## Build")]
     shape = (all(i >= 0 for i in order) and order == sorted(order) and "Wrong" not in page and "*(slow)*" in page
              and "(../scripts/check-pins.sh)" in page and "Formats every source file" in page
              and "**`fmt`**: Formats" in page and "**`test`** *(slow)*: Runs the whole test suite" in page)

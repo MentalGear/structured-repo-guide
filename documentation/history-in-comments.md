@@ -138,8 +138,8 @@ A comment line is history when it tells how the code changed instead of what it 
 
 | Kind | Looks like | Why it is history |
 |---|---|---|
-| Date | `2025-03-02`, `since March` | Dates the story, not the code. |
-| Commit hash | `fixed in 98e7ca1b` | Points at a change, and the tracker item already carries it. |
+| Date | `2025-03-02`, `March 2025`, `02/03/2025`, `since March` | Dates the story, not the code. |
+| Commit hash | `fixed in 3fa9c21b` | Points at a change, and the tracker item already carries it. |
 | "used to" | `used to be 3px` | Names a previous state. |
 | "previously", "formerly" | `previously this took the first child` | Same. |
 | "no longer" | `no longer uses the shared timer` | Defines the code by what it dropped. |
@@ -157,7 +157,11 @@ A comment line is history when it tells how the code changed instead of what it 
 Not history, and not flagged:
 
 - The passive sense: `is used to size the panel`, `can be used to anchor it`.
-- A state word: `the previously focused element`.
+- A state word: `the previously focused element`. The word is a state after a determiner and before a participle; at the
+  start of a clause (`Previously it returned nil`) or after a pronoun (`it previously returned`) it is a story.
+- A runtime event with a named actor or data structure: `a value that was changed by the caller`, `the field was removed
+  from the payload by the server`. The same verb about the code (`this was renamed`) is history. So is a condition
+  (`freed once it is no longer referenced`), where `no longer` states what must hold and tells no story.
 - A colour or a hex literal that looks like a hash: `#abc1234`, `0xdeadbeef`.
 - A pinned upstream revision that a file was ported from, in the form `ported from lib/x.py @ 7e4034b`. That is
   provenance (where the code came from), and it is current: the file is that port.
@@ -179,7 +183,7 @@ Prefer to say what the code does, and let the item say what it stopped doing:
 | Instead of | Write |
 |---|---|
 | `// no longer uses the shared timer` | State what it uses. The item says what it stopped using. |
-| `// fixed in 98e7ca1b` | `// (backlog 245)`. The item carries the commit. |
+| `// fixed in 3fa9c21b` | `// (backlog 245)`. The item carries the commit. |
 | `// previously this took the first child; now it reads the registered item` | `// reads the registered item, so a wrapper element cannot be mistaken for the first child` |
 
 ## Markers for deliberate exceptions
@@ -212,11 +216,20 @@ Two checks share one comment extractor, so what counts as a comment is decided i
   `sh scripts/check-history-comments.sh --update-baseline` to lock the drop in; that is the command in your
   repository once the scripts are copied into `scripts/`).
 - **Reference check** (`check-comment-refs.sh`). Every cited tracker id must have a file in the tracker. Every repository
-  path that a comment names must exist. Dead ones that predate the check are in a second baseline.
+  path that a comment names must exist: a path that starts at a top-level directory of the tree (`scripts/x.sh`, also with a
+  leading `./`), a name written `./file` for a root-level file, and an upper-case Markdown name such as a `README.md`, which
+  must exist somewhere in the tree. A bare lower-case file name (`utils.py`) is as often an example as a citation and is
+  not checked. A list of ids stops at a number followed by a noun (`backlog 12 and 3 others`). Dead ones that predate the
+  check are in a second baseline.
 
-The extractor knows each language's comment syntax from a table keyed by file extension. A comment marker inside a string
-is not a comment. A Python docstring is read as a comment. It skips vendored and generated trees, and Markdown, because
-docs are where history may live.
+The extractor knows each language's comment syntax from a table keyed by file extension, then by file name (`Makefile`,
+`Dockerfile`, `Dockerfile.dev`) and, for a file with no extension, by its `#!` line. Add a language, a name or an interpreter
+by adding a row. A comment marker inside a string is not a comment, and the extractor reads the strings that hold them:
+Python triple-quoted strings, shell here-documents and multi-line quoted strings, text blocks in Java, Kotlin, Swift and C#,
+and JavaScript regex literals. Only a Python docstring (the first statement of a module, class or function) is read as a
+comment. Inside a git work tree the files are the ones git lists (tracked, and untracked but not ignored), so a virtualenv
+or a build tree that `.gitignore` names is never scanned; elsewhere it walks the tree and skips directories named like
+one. It skips vendored and generated trees, and Markdown, because docs are where history may live.
 
 The scripts are in [`../examples/documentation/`](../examples/documentation/README.md). Each has a `--self-test` that plants a
 violation and requires the check to go red, and each wrapper runs it quietly after the check
@@ -258,8 +271,15 @@ below) is a second run of the same check with `--tracker docs/issues --word issu
   finds nothing that its patterns do not describe.
 - Some patterns trade a few false positives for coverage, and "old" in `kept for old callers` is one of them: "old" ages, so
   the rewrite names the thing ("callers older than v3") and the marker is for the rare line that must stay as it is.
-- Code inside a string of another language, and multi-line quoted strings in shell, are not scanned. The gaps only make
-  the check more lenient.
+- The extractor is a lexer, not a parser. Its gaps cut both ways: a comment can be missed (code inside a string of another
+  language, such as the Python file that a here-document writes, or a `${...}` expression in a JavaScript template literal)
+  and text can be read as a comment (a `/` after `)` or `}` that opens a regex in JavaScript is read as division; a `//` in
+  the template text of a Vue or Svelte file, which has no section model, is read as a comment). A pattern that misreads a
+  file belongs in the extractor with its fixture in the self-test, not in a marker.
+- The date, `previously`, `no longer` and passive-change patterns are heuristics over one line. A date written as a month name
+  is matched only capitalised (`May` the month, not `may` the verb); `no longer` fires wherever it is not a length
+  (`no longer than`) or a condition; a passive change verb is let through when a named actor or a data structure did it.
+  Each trades a few misses and false positives for coverage: tighten the pattern when review finds one.
 - Prose docs are not scanned for narration. Their rule is in [`principles.md`](./principles.md): living docs state the
   current state, and history goes to the archive. One shape is checked by its own ratchet: a dated heading or lead-in
   (`## Status (2025-03-02)`) in a living doc (`check-dated-headings.sh`).

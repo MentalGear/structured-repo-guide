@@ -2,10 +2,13 @@
 """doc_hygiene.py -- three small checks over the Markdown docs of a tree.
 
     placeholders   a document copied from a template has no leftover `<placeholder>`, no `YYYY-MM-DD`, and no
-                   "Template." comment: the template's own instructions are deleted once it is filled in
+                   template comment: the template's own instructions are deleted once it is filled in. The
+                   placeholders are checked in the entry file, the status page and the decisions index; the
+                   template comment (an HTML comment that opens with the word Template) in EVERY Markdown file of
+                   the tree, so a guide or an item copied from a template cannot keep its instructions unseen
     map            every Markdown file under docs/ is reachable from the docs map (docs/README.md) by following
                    relative links, so a doc that is not in the map does not exist for a new reader
-    dated          a ratchet on dated headings and dated lead-ins ("## Status (March 2025)", "Update (a date):")
+    dated          a ratchet on dated headings and dated lead-ins ("## Status (<a month and year>)")
                    in living docs: such a paragraph is a diary entry, and history belongs in the archive
 
 Usage (run from the repository root; Python 3 standard library only):
@@ -17,8 +20,9 @@ Usage (run from the repository root; Python 3 standard library only):
     doc_hygiene.py --self-test [placeholders | map | dated]
 
     --root DIR          the tree to check (default: the current directory)
-    FILE...             placeholders: the documents to check (default: those of AGENTS.md, CLAUDE.md,
-                        docs/STATUS.md and docs/decisions.md that exist); dated: scan only these
+    FILE...             placeholders: the documents to check fully; dated: scan only these. With none, placeholders
+                        checks AGENTS.md, CLAUDE.md, docs/STATUS.md and docs/decisions.md ref-ok: names the tool looks for
+                        (those that exist) fully, and every other Markdown file for the template comment only
     --map FILE          the map (default docs/README.md); --docs DIR the tree it must cover (default docs)
     --skip PREFIX       map: root-relative paths that need no link (repeatable); dated: living docs are everything
                         under docs/ and the root-level *.md except the history homes (archive/, backlog/, research/,
@@ -39,12 +43,13 @@ import subprocess
 import sys
 import tempfile
 
-SKIP_DIRNAMES = {".git", "node_modules", "target", "dist", "build", "__pycache__", ".venv"}
+SKIP_DIRNAMES = {".git", "node_modules", "target", "dist", "build", "__pycache__", ".venv", "venv", ".tox"}
 DEFAULT_PLACEHOLDER_FILES = ("AGENTS.md", "CLAUDE.md", "docs/STATUS.md", "docs/decisions.md")
 HISTORY_HOMES = ("docs/archive/", "docs/backlog/", "docs/research/", "docs/issues/", "docs/drafts/")
 DATED_BASELINE = "scripts/baselines/dated-headings.tsv"
 
 HTML_COMMENT = re.compile(r"<!--(.*?)-->", re.S)
+TEMPLATE_COMMENT = re.compile(r"\s*(?:Template|TEMPLATE)\b")
 ANGLE = re.compile(r"<([^<>\n]+)>")
 HTML_TAG = re.compile(r"^/?(?:a|b|br|code|details|div|em|h[1-6]|hr|i|img|kbd|li|ol|p|pre|span|strong|sub|summary|sup|"
                       r"table|tbody|td|th|thead|tr|ul)(?:\s[^<>]*)?/?$", re.I)
@@ -65,6 +70,23 @@ def read(path):
         return fh.read()
 
 
+def listed_markdown(root):
+    """Root-relative Markdown files: git's view (tracked and untracked, minus ignored) inside a work tree, a walk
+    elsewhere; never the history homes' archive, where a template may be quoted."""
+    try:
+        r = subprocess.run(["git", "-C", root, "ls-files", "-z", "--cached", "--others", "--exclude-standard", "*.md"],
+                           capture_output=True, timeout=120)
+    except (OSError, subprocess.SubprocessError):
+        r = None
+    if r is not None and r.returncode == 0:
+        paths = [p for p in r.stdout.decode("utf-8", "surrogateescape").split("\0")
+                 if p and os.path.isfile(os.path.join(root, p))]
+    else:
+        paths = markdown_files(root)
+    return sorted(p for p in paths if not p.startswith("docs/archive/")
+                  and not any(part in SKIP_DIRNAMES for part in p.split("/")[:-1]))
+
+
 def markdown_files(root, under=""):
     out = []
     for dirpath, dirnames, filenames in os.walk(os.path.join(root, under)):
@@ -81,12 +103,19 @@ def blank_keep_lines(rx, text):
 
 
 # --------------------------------------------------------------------------- placeholders
-def check_placeholders(root, files):
+def check_placeholders(root, files, comment_only=()):
+    """Problems in `files` (placeholders and the template comment) and in `comment_only` (the template comment)."""
     probs = []
+    for rel in comment_only:
+        text = read(os.path.join(root, rel))
+        for m in HTML_COMMENT.finditer(text):
+            if TEMPLATE_COMMENT.match(m.group(1)):
+                probs.append(f"{rel}:{text.count(chr(10), 0, m.start()) + 1}: the template's instruction comment is still "
+                             "here; delete it")
     for rel in files:
         text = read(os.path.join(root, rel))
         for m in HTML_COMMENT.finditer(text):
-            if re.match(r"\s*Template\b", m.group(1)):
+            if TEMPLATE_COMMENT.match(m.group(1)):
                 probs.append(f"{rel}:{text.count(chr(10), 0, m.start()) + 1}: the template's instruction comment is still "
                              "here; delete it")
         body = blank_keep_lines(HTML_COMMENT, text)
@@ -110,14 +139,16 @@ def cmd_placeholders(root, opts):
         print("placeholders: no such file: " + ", ".join(missing or DEFAULT_PLACEHOLDER_FILES) +
               " (name the copied documents: doc_hygiene.py placeholders FILE...)", file=sys.stderr)
         return 2
-    probs = check_placeholders(root, files)
+    extra = [] if opts["files"] else [f for f in listed_markdown(root) if f not in files]
+    probs = check_placeholders(root, files, extra)
     for p in probs:
         print("placeholders: " + p, file=sys.stderr)
     if probs:
         print("Fill in or delete every placeholder, and delete the template's own comment. Text that really is angle "
               "brackets takes `placeholder-ok: <reason>` on its line.", file=sys.stderr)
         return 1
-    print(f"placeholders: OK ({len(files)} files: {', '.join(files)})")
+    print(f"placeholders: OK ({len(files)} files: {', '.join(files)}; template comment also checked in "
+          f"{len(extra)} other Markdown files)")
     return 0
 
 
@@ -293,6 +324,13 @@ def self_test(kind=None):
             ("placeholder-ok with a reason exempts", {"AGENTS.md": "Run `tool <file>` placeholder-ok: the command's own syntax\n"}, 0),
             ("placeholder-ok without a reason does not", {"AGENTS.md": "Run `tool <file>` placeholder-ok:\n"}, 1),
             ("a code fence is scanned too", {"AGENTS.md": "```sh\nrun <entry point>\n```\n"}, 1),
+            ("a copied guide that keeps the template comment fails (any Markdown file)",
+             {"AGENTS.md": filled, "docs/guides/history-in-comments.md": "# Rule\n\n<!--\nTemplate. Copy to docs/guides/. Delete this comment.\n-->\n"}, 1),
+            ("an upper-case TEMPLATE comment fails too", {"AGENTS.md": filled, "SECURITY.md": "<!-- TEMPLATE: copy this file. -->\n"}, 1),
+            ("an item copied from a template keeps its comment: fails", {"AGENTS.md": filled, "docs/backlog/001-x.md": "---\nid: 1\n---\n\n<!--\nTemplate, ready to run as the FIRST item.\n-->\n"}, 1),
+            ("a quoted template in the archive is history, not a leftover", {"AGENTS.md": filled, "docs/archive/old.md": "<!-- Template. x -->\n"}, 0),
+            ("another comment, and a <placeholder>, in an other Markdown file pass", {"AGENTS.md": filled, "docs/guides/g.md": "<!-- a note -->\nRun `tool <file>`.\n"}, 0),
+            ("a named file limits the check to it", {"AGENTS.md": filled, "docs/guides/g.md": "<!-- Template. x -->\n"}, 0, ["AGENTS.md"]),
             ("an unnamed run with no default file is bad usage", {"README.md": "x\n"}, 2),
             ("a named file that is missing is bad usage", {"AGENTS.md": filled}, 2, ["nope.md"]),
         ])
