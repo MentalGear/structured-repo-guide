@@ -1,0 +1,15 @@
+# The gate list: one line per gate, `name|command`, run in this order by `sh scripts/run-gates.sh`. Copy it to scripts/gates.list.
+# Every check goes here (the runner fails when a scripts/check-*.sh is missing from it), the catalogue docs/checks.md is
+# generated from it, and nothing else names a gate. Never cut a gate to make a run faster: tag it `slow` and use --fast.
+#
+# A check script is described by its own header. A plain command is described by the comment lines directly above it.
+# Tags after the name: `slow` (left out by --fast) and `reuse:PATH,PATH` (a PASS is stored per hash of those paths).
+# group: Documentation
+check-history-comments|sh scripts/check-history-comments.sh
+check-comment-refs|sh scripts/check-comment-refs.sh
+check-doc-links|sh scripts/check-doc-links.sh
+check-docs-catalogue|sh scripts/check-docs-catalogue.sh
+check-backlog-index|sh scripts/check-backlog-index.sh
+check-placeholders|sh scripts/check-placeholders.sh
+check-doc-map|sh scripts/check-doc-map.sh
+check-dated-headings|sh scripts/check-dated-headings.sh

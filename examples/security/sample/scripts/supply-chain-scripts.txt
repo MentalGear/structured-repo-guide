@@ -1,0 +1,9 @@
+# The declared set: every script here must be named in a row of docs/supply-chain.md, and must exist.
+scripts/check-pins.sh
+scripts/check-artifacts.sh
+scripts/build-artifacts.sh
+scripts/check-remote-assets.sh
+scripts/release-stamp.sh
+scripts/run-gates.sh
+scripts/check-controls-table.sh
+scripts/check-workflow-permissions.sh

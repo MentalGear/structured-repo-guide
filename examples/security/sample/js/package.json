@@ -1,0 +1,13 @@
+{
+  "name": "sample-web",
+  "private": true,
+  "packageManager": "pnpm@10.28.0",
+  "dependencies": {
+    "left-pad-ish": "1.3.0",
+    "shared-ui": "workspace:*"
+  },
+  "devDependencies": {
+    "bundler-ish": "2.4.1",
+    "linter-ish": "9.1.0-rc.2"
+  }
+}

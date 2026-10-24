@@ -1,0 +1,11 @@
+# The gate list: one line per gate, `name|command`, run in this order by `sh scripts/run-gates.sh`. Every check goes
+# here (the runner fails when a scripts/check-*.sh is missing), and the catalogue page docs/checks.md is generated
+# from it. A check script is described by its own header; a plain command by the comment lines above its entry.
+# group: Source hygiene
+check-final-newline|sh scripts/check-final-newline.sh
+check-no-tabs|sh scripts/check-no-tabs.sh
+# group: Tracker
+check-todo-has-id|sh scripts/check-todo-has-id.sh
+# group: Build
+# Parses the build script without running it, so a syntax error is caught here and not on the first deploy.
+build-syntax|sh -n src/build.sh
