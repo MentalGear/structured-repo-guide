@@ -10,14 +10,22 @@ library only (the file is read line by line in the usual block style, not parsed
   2. Nothing is `write-all`, anywhere. A top-level block grants nothing but `read`/`none`
      (read-only by default); a job widens a single scope (`contents: write`) when it must.
   3. No privileged trigger runs proposed code. A workflow triggered by `pull_request_target`
-     (runs with secrets and a write token) must not check out the pull request's head
-     (`ref:` or `repository:` naming `github.event.pull_request.head`, `github.head_ref` or
-     `refs/pull/`); the same for `workflow_run` and `github.event.workflow_run.head`.
+     (runs with secrets and a write token) must not check out the pull request's head: no
+     `ref:` or `repository:` (block or flow-style `with: { ref: ... }`) naming
+     `github.event.pull_request.head`, `github.head_ref` or `refs/pull/`, and no `run:` step
+     (one line or a block scalar) that names the head or fetches it by hand
+     (`gh pr checkout`, `pull/<n>/head`, `pull/<n>/merge`, the same head expressions). The same
+     for `workflow_run` and `github.event.workflow_run.head`.
   4. Third-party actions are pinned to a full 40-hex commit: `uses: owner/repo@<sha>`. A tag
      moves. Local actions (`./...`) and `docker://` references are not judged; a line that
      carries `# pin-ok: <reason>` is allowed.
 
-Not checked: whether the repository's own setting (Settings, Actions, workflow permissions) is
+Permissions maps are read in block style (`contents: write` on its own line) and in flow style
+(`permissions: { contents: write }`).
+
+Not checked: a head reached through an indirection (an `env:` value or a step output that holds
+the head ref and a later step that checks it out, a reusable workflow, a script that runs
+`git` itself, an artifact downloaded by `workflow_run`), whether the repository's own setting (Settings, Actions, workflow permissions) is
 read-only, whether a pinned commit is the one you reviewed, matrix and reusable-workflow `with:`
 indirection, and CI systems other than GitHub Actions (the same four questions apply; write the
 check for your system's file format).
@@ -37,6 +45,8 @@ import sys
 import tempfile
 
 HEAD_REF = re.compile(r"github\.event\.pull_request\.head|github\.head_ref|refs/pull/|github\.event\.workflow_run\.head")
+# What a `run:` step does to fetch the proposed code: the head expressions above, or a by-hand fetch of it.
+RUN_HEAD = re.compile(HEAD_REF.pattern + r"|\bgh\s+pr\s+checkout\b|\bpull/.{1,60}?/(?:head|merge)\b")
 USES = re.compile(r"^\s*-?\s*uses\s*:\s*['\"]?([^\s'\"#]+)")
 SHA = re.compile(r"[0-9a-f]{40}")
 
@@ -67,12 +77,33 @@ def permission_problems(lines, i, where):
     inline = strip_comment(lines[i]).split(":", 1)[1].strip()
     if inline == "write-all":
         out.append(f"{where} permissions are `write-all`; grant the scopes the job needs")
+    elif inline.startswith("{"):
+        if where == "top-level":
+            for m in re.finditer(r"([\w-]+)\s*:\s*['\"]?write\b", inline):
+                out.append(f"top-level permissions grant `{m.group(1)}: write`; keep the top level read-only and widen in the one job that needs it")
+        if re.search(r"\bwrite-all\b", inline):
+            out.append(f"{where} permissions are `write-all`; grant the scopes the job needs")
     elif not inline:
         if where == "top-level":
             for k in block_indices(lines, i):
-                m = re.match(r"\s*([\w-]+)\s*:\s*write\b", lines[k])
+                m = re.match(r"\s*([\w-]+)\s*:\s*['\"]?write\b", lines[k])
                 if m:
                     out.append(f"top-level permissions grant `{m.group(1)}: write`; keep the top level read-only and widen in the one job that needs it")
+    return out
+
+
+def run_step_lines(code):
+    """(line number, text) of every `run:` step: the one-line form and each line of a block scalar."""
+    out = []
+    for i, l in enumerate(code):
+        m = re.match(r"\s*-?\s*run\s*:\s*(.*)$", l)
+        if not m:
+            continue
+        rest = m.group(1).strip()
+        if rest and not re.match(r"[|>][+-]?\d*$", rest):
+            out.append((i + 1, rest))
+        elif rest:
+            out += [(k + 1, code[k].strip()) for k in block_indices(code, i)]
     return out
 
 
@@ -121,6 +152,11 @@ def check_file(path):
             for n, l in enumerate(code, 1):
                 if re.match(r"\s*-?\s*(ref|repository)\s*:", l) and HEAD_REF.search(l):
                     out.append(f"line {n}: `{trigger}` runs with secrets and must not check out the proposed head ({l.strip()})")
+                elif re.search(r"\bwith\s*:\s*\{", l) and re.search(r"\b(ref|repository)\s*:", l) and HEAD_REF.search(l):
+                    out.append(f"line {n}: `{trigger}` runs with secrets and must not check out the proposed head ({l.strip()})")
+            for n, l in run_step_lines(code):
+                if RUN_HEAD.search(l):
+                    out.append(f"line {n}: `{trigger}` runs with secrets and a `run:` step must not fetch or name the proposed head ({l.strip()})")
 
     # 4: third-party actions pinned to a commit
     for n, (c, r) in enumerate(zip(code, raw), 1):
@@ -224,6 +260,33 @@ def self_test():
          GOOD.replace("  pull_request:\n", "  workflow_run:\n    workflows: [ci]\n").replace(
              f"      - uses: actions/checkout@{SHA1}\n",
              f"      - uses: actions/checkout@{SHA1}\n        with:\n          ref: ${{{{ github.event.workflow_run.head_sha }}}}\n", 1))
+    case("flow-style top-level write scopes", "top-level permissions grant `contents: write`",
+         GOOD.replace("permissions:\n  contents: read\n", "permissions: { contents: write, pull-requests: write }\n"))
+    case("a flow-style top-level read scope is green", None,
+         GOOD.replace("permissions:\n  contents: read\n", "permissions: { contents: read }\n"))
+    case("a flow-style write-all", "`write-all`", GOOD.replace("permissions:\n  contents: read\n", "permissions: { all: write-all }\n"))
+    case("a flow-style job widening one scope is green", None,
+         GOOD.replace("    permissions:\n      contents: write\n", "    permissions: { contents: write }\n"))
+    case("pull_request_target whose run step is `gh pr checkout`", "a `run:` step must not fetch or name the proposed head",
+         GOOD.replace("  pull_request:\n", "  pull_request_target:\n").replace(
+             "      - run: sh scripts/run-gates.sh\n",
+             "      - run: gh pr checkout ${{ github.event.pull_request.number }} && make test\n", 1))
+    case("pull_request_target whose block run step fetches pull/N/head", "a `run:` step must not fetch or name the proposed head",
+         GOOD.replace("  pull_request:\n", "  pull_request_target:\n").replace(
+             "      - run: sh scripts/run-gates.sh\n",
+             "      - run: |\n          git fetch origin pull/${{ github.event.number }}/head\n          make test\n", 1))
+    case("pull_request_target whose run step names the head sha", "a `run:` step must not fetch or name the proposed head",
+         GOOD.replace("  pull_request:\n", "  pull_request_target:\n").replace(
+             "      - run: sh scripts/run-gates.sh\n",
+             "      - run: git checkout ${{ github.event.pull_request.head.sha }}\n", 1))
+    case("pull_request_target with a flow-style `with: { ref: head }`", "must not check out the proposed head",
+         GOOD.replace("  pull_request:\n", "  pull_request_target:\n").replace(
+             f"      - uses: actions/checkout@{SHA1}\n",
+             f"      - uses: actions/checkout@{SHA1}\n        with: {{ ref: '${{{{ github.event.pull_request.head.sha }}}}' }}\n", 1))
+    case("a plain run step under pull_request_target is green", None,
+         GOOD.replace("  pull_request:\n", "  pull_request_target:\n"))
+    case("`gh pr checkout` under a plain pull_request trigger is green", None,
+         GOOD.replace("      - run: sh scripts/run-gates.sh\n", "      - run: gh pr checkout 1\n", 1))
     case("an action pinned to a tag", "is not pinned to a 40-hex commit", GOOD.replace(f"actions/checkout@{SHA1}\n", "actions/checkout@v4\n", 1))
     case("an action pinned to a branch", "is not pinned", GOOD.replace(f"actions/checkout@{SHA1}\n", "actions/checkout@main\n", 1))
     case("a pin-ok marker without a reason", "is not pinned",

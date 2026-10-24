@@ -95,7 +95,8 @@ onlyBuiltDependencies: []       # no dependency runs an install script
 save-exact=true
 ```
 
-To keep the `.npmrc` line from being removed, add `set -- "$@" --require-setting .npmrc:save-exact=true` above the `exec` line
+A Cargo dependency that names `registry = "name"` is red; if one private registry is intended, add
+`set -- "$@" --cargo-registry name` above the `exec` line. To keep the `.npmrc` line from being removed, add `set -- "$@" --require-setting .npmrc:save-exact=true` above the `exec` line
 of `scripts/check-pins.sh`. Settings that depend on your pnpm version (`trustPolicy: no-downgrade`, `blockExoticSubdeps`) are in
 the playbook's [Unverified](./supply-chain-playbook.md#unverified-confirm-for-your-version) section: confirm one for your
 version before you add it, then require it the same way (`--require-setting pnpm-workspace.yaml:trustPolicy=no-downgrade`).
@@ -153,11 +154,11 @@ From the root of this repository:
 ```sh
 sh examples/security/run-examples.sh                              # everything; the last line is "examples/security: ALL OK"
 sh examples/security/sample/scripts/run-gates.sh                  # the sample's one runner; ends with ALL GREEN
-python3 -I examples/security/check-pins.py --self-test            # 49 cases, each mutation must turn the check red
-python3 -I examples/security/artifact-manifest.py --self-test     # 10 cases
-python3 -I examples/security/check-remote-assets.py --self-test   # 8 cases
-python3 -I examples/security/check-workflow-permissions.py --self-test   # 16 cases
-sh examples/security/sample/scripts/check-controls-table.sh       # OK line, then its 16-mutation self-test, quietly
+python3 -I examples/security/check-pins.py --self-test            # each mutation must turn the check red; the last line says OK
+python3 -I examples/security/artifact-manifest.py --self-test
+python3 -I examples/security/check-remote-assets.py --self-test
+python3 -I examples/security/check-workflow-permissions.py --self-test
+sh examples/security/sample/scripts/check-controls-table.sh       # OK line, then its mutation self-test, quietly
 python3 -I examples/security/check-controls-table.py --root examples/security/sample \
   --doc docs/supply-chain.md --security SECURITY.md --gate-list scripts/gates.list \
   --declared scripts/supply-chain-scripts.txt --heading '## Threat model' --heading '## Controls' --self-test

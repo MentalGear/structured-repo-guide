@@ -19,6 +19,24 @@ $py "$here/check-controls-table.py" --root "$here/sample" --doc docs/supply-chai
   --gate-list scripts/gates.list --declared scripts/supply-chain-scripts.txt \
   --heading '## Threat model' --heading '## Controls' --self-test | tail -1
 
+step "the security documents agree with the tree"
+doc_fail() { echo "  FAIL docs: $*" >&2; exit 1; }
+# A count written into prose goes stale the moment a case is added: the self-test prints its own count.
+if grep -nE '[0-9]+[ -](cases?|mutations?)\b' "$here/../../security/"*.md "$here/README.md" >/dev/null; then
+  grep -nE '[0-9]+[ -](cases?|mutations?)\b' "$here/../../security/"*.md "$here/README.md" >&2
+  doc_fail "a hard-coded self-test count"
+fi
+echo "  ok   no document hard-codes a self-test count"
+# One name for the group: the documents say `Security`, so the sample's gate list does too.
+grep -q '^# group: Security$' "$here/sample/scripts/gates.list" || doc_fail "the sample gate list is not in the Security group"
+if grep -rn 'group: Supply chain' "$here/sample" "$here/starter" "$here/../../security" >/dev/null 2>&1; then doc_fail "a security group named Supply chain"; fi
+echo "  ok   the sample's group is Security, as security/README.md says"
+# An example table must not state as enforced what the playbook marks unverified.
+if grep -n '^| C04 .*trustPolicy' "$here/../../security/controls-table.md" "$here/sample/docs/supply-chain.md" "$here/starter/docs/supply-chain.md" >/dev/null 2>&1; then
+  doc_fail "an example controls-table row states trustPolicy enforcement as fact"
+fi
+echo "  ok   no example table row states an unverified pnpm setting as enforced"
+
 step "the sample tree: one runner, every gate"
 sh "$here/sample/scripts/run-gates.sh"
 

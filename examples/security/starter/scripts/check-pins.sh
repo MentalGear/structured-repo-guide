@@ -10,7 +10,8 @@
 # Optional files are used when they exist: pins.allow (path|name|reason lines) and pnpm-workspace.yaml at the root
 # (release age, no install scripts). For a Cargo library add `--cargo-lock Cargo.lock`; for pip files that carry hashes add
 # `--pip-require-hashes`; for another pnpm folder add another `--pnpm-workspace PATH`; to keep a setting from being removed add
-# `--require-setting .npmrc:save-exact=true`.
+# `--require-setting .npmrc:save-exact=true`; for the one private Cargo registry a dependency may name add
+# `--cargo-registry NAME`.
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/.." && pwd)
