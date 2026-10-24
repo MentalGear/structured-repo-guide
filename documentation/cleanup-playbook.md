@@ -5,6 +5,17 @@ history: landing logs, dated status paragraphs, incident stories, finished resea
 Use it once, then let the checks keep the repository clean. Every step ends with a verification, because a cleanup
 that cannot be verified is a rewrite.
 
+**Before you start.** You need `git` (the playbook uses `git ls-files`, `git grep` and `git mv`), `sh`, `awk` and Python 3.8
+or newer (the documentation scripts use only the standard library; they are tested on 3.8 to 3.13). Words used here, defined once:
+
+| Word | Meaning |
+|---|---|
+| **owner** | The person who decides what is deleted, kept or shipped: a maintainer, a team lead, or on a solo project, you. |
+| **helper** | A person or an agent who does one piece of the cleanup. A cleanup is split into **work streams**: pieces with disjoint sets of files, each handed to one helper. |
+| **check**, **gate**, **runner** | A check is one script that fails when a rule is broken. A gate is one line of the runner's list (a check, or a plain command). The runner is the one command that runs every gate. See [`gate-runner.md`](./gate-runner.md). |
+| **baseline**, **ratchet** | A baseline is a committed file recording the violations that exist today; a ratchet is a check that accepts exactly that and lets it only shrink ([`ratchets.md`](./ratchets.md)). |
+| **entry file** | The short file an agent or a new contributor reads first (`AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING.md`). |
+
 ## Contents
 
 - [Ground rules](#ground-rules)
@@ -14,7 +25,7 @@ that cannot be verified is a rewrite.
 - [Step 3: choose the target layout](#step-3-choose-the-target-layout)
 - [Step 4: move and archive](#step-4-move-and-archive)
 - [Step 5: trim the living docs](#step-5-trim-the-living-docs)
-- [Step 6: shrink the entry file and generate the catalogue](#step-6-shrink-the-entry-file-and-generate-the-catalogue)
+- [Step 6: the entry file, decisions, status and catalogue](#step-6-the-entry-file-decisions-status-and-catalogue)
 - [Step 7: sweep the comments](#step-7-sweep-the-comments)
 - [Step 8: split the tracker](#step-8-split-the-tracker)
 - [Step 9: final verification and review](#step-9-final-verification-and-review)
@@ -30,7 +41,8 @@ that cannot be verified is a rewrite.
   repository worse.
 - **One step per commit.** A step is reviewable and revertible. The commit message names the step and the evidence.
 - **Verify after every step.** The verification is in the step. A step is not done until it passes.
-- **The owner decides what is deleted.** Report the large files with a proposed plan. Do not guess.
+- **The owner decides what is deleted.** Report the large files with a proposed plan. Do not guess. (On a solo project the
+  owner is you: write the plan down anyway, because the plan is what the verification checks.)
 - **Nobody deletes remote branches or published artifacts as part of a docs cleanup.** That needs its own approval.
 
 ## Step 0: measure
@@ -47,6 +59,13 @@ sh scripts/check-comment-refs.sh --inventory 2>&1 | tail -1              # dead 
 
 Write the numbers into the tracker item that owns the cleanup. The same commands run at the end show the change.
 
+If there is no tracker yet, this item is the first one. Create it as a file: copy
+[`../templates/backlog-item.md`](../templates/backlog-item.md) to `docs/backlog/001-docs-cleanup.md` (`NNN-slug.md`: the
+number zero-padded to three digits, a few lower-case words), title it, set `updated`, and paste the numbers into its
+`## Status`. The template is ready to run as item 1. The indexes come in Step 1, when the generator is installed
+(`python3 -I scripts/backlog_index.py --write`, which writes both `docs/backlog.md` and `docs/backlog-done.md`); see
+[`tracker-as-files.md`](./tracker-as-files.md#creating-the-first-item).
+
 **Verify:** the numbers are in the item.
 
 ## Step 1: install the guards first
@@ -55,15 +74,22 @@ Install the checks before moving anything. They freeze the debt, so it cannot gr
 every citation the moves break.
 
 1. Add the scripts from [`../examples/documentation/`](../examples/documentation/README.md): the link checker, the
-   history check, the reference check. Wire them into the one entry point that runs the checks.
-2. Create the baselines: `check-history-comments.sh --update-baseline`, `check-comment-refs.sh --update-baseline`.
-   The first run on a large tree prints hundreds of lines. That is the debt, and now it is counted.
-3. Run `check_doc_links.py`. Fix or baseline broken links. (A link checker has no baseline in the examples. Fix them;
-   broken links are cheap to fix.)
+   history check, the reference check, and the runner with its gate list
+   ([`gate-runner.md`](./gate-runner.md)). List every check in `scripts/gates.list`, so the runner is the one command that
+   runs them. Without a runner there is no "run every check", and the rest of the playbook has nothing to verify with.
+2. Create the baselines: `sh scripts/check-history-comments.sh --update-baseline`,
+   `sh scripts/check-comment-refs.sh --update-baseline` and `sh scripts/check-dated-headings.sh --update-baseline` (the dated
+   headings of the living docs, which Step 5 trims). The first run on a large tree prints hundreds of lines. That is the
+   debt, and now it is counted.
+3. Run `sh scripts/check-doc-links.sh`. The link checker has no baseline, so there is nothing to freeze: **fix the broken links.**
+   They are cheap to fix. If the tree has hundreds because nobody ever checked, fix them by directory in the order of Step 4
+   and, until a directory is done, pass it as `--skip docs/that-directory/` in the gate list line; each skip is deleted when its
+   directory is fixed, and the line ends with no skip at all.
 4. Commit: "chore: add the history, reference and link checks with baselines".
 
-**Verify:** the entry point is green. Plant a violation (`# used to be 3` in a source file) and see it go red. Remove it.
-See [`ratchets.md`](./ratchets.md).
+**Verify:** the runner is green (`sh scripts/run-gates.sh`, exit 0, `ALL GREEN`). Plant a violation (`# used to be 3` in a source file) and see it go red. Remove it.
+See [`ratchets.md`](./ratchets.md).4. Commit: "chore: add the history, reference and link checks with baselines".
+
 
 ## Step 2: inventory the docs
 
@@ -99,7 +125,7 @@ How to fill it:
 
 Use the tree in [`layout.md`](./layout.md). Write it down in the cleanup item before you move anything, with the
 decision for each directory: which directories exist, which are new, which are removed. Include the rule for
-what each directory holds, so later lanes do not reopen it.
+what each directory holds, so later helpers do not reopen it.
 
 **Verify:** the item contains the target tree and the per-directory rule.
 
@@ -119,7 +145,7 @@ For each group:
 3. Prove no stale citation is left: `git grep -n 'docs/research/old-name'` prints nothing.
 4. Add the archive banner to each moved file: "Historical. Check the date before acting on anything here."
 5. Add the group to the archive's index.
-6. Run the checks.
+6. Run the runner (`sh scripts/run-gates.sh`).
 
 **Verify, every commit:** `git grep` on each old path is empty; the link checker is green; the reference check is green
 or only shows baselined entries; the dead-reference baseline shrank where the moves fixed citations
@@ -134,39 +160,53 @@ For each "trim" row:
 3. Replace "finished phase" paragraphs with one line and a link to the pull request or the item.
 4. Replace measurement stories with the current number, and link the evidence.
 5. Under a cited heading whose story moved, leave a pointer: "Moved to `archive/...`".
+6. Lock the drop in: `sh scripts/check-dated-headings.sh --update-baseline`, committed with the trim.
 
 **Verify:** the doc's size dropped to the target. Every cited heading still exists (`git grep` for each heading name that
 a comment cites). The link checker is green. Skim the result as a new reader: nothing should require knowing the past.
 
-## Step 6: shrink the entry file and generate the catalogue
+## Step 6: the entry file, decisions, status and catalogue
 
-The entry file is usually where the most history and the most copies sit.
+The entry file is usually where the most history and the most copies sit, and it is also where the decisions in force and the
+current state are hidden. This step pulls those three things apart, each to its home.
 
-1. Move every rule to its home ([`principles.md`](./principles.md#2-one-home-per-rule)): build rules to the contributor
-   guide, tool traps to the guide for that tool, process rules to the process doc.
-2. Leave in the entry file: the session-start pointer, the rules that apply to every change in a line or two each, the
-   commit convention, and pointers.
-3. Replace the list of checks with the generated catalogue ([`generated-docs.md`](./generated-docs.md)). Add the header
-   description to each check script, then run the generator.
-4. Add the freshness check to the entry point.
+1. **Harvest the decisions.** Read the entry file and the old docs for sentences that are standing decisions: "we do not ship an
+   editor", "CI stays off until the tracker is empty", "never delete a branch without asking". Write each as one line of
+   `docs/decisions.md` ([`../templates/decisions.md`](../templates/decisions.md)): the decision in present tense, its date if
+   known, and a link to the item or doc that carries the reasoning (create the item if there is none). A decision that was
+   reversed does not go in; it stays in its item. Then delete the sentence from where you found it, or replace it with
+   "see `docs/decisions.md`". Ask the owner about every line you are unsure of.
+2. **Move every rule to its home** ([`principles.md`](./principles.md#2-one-home-per-rule)): build rules to the contributor guide,
+   tool traps to the guide for that tool, process rules to the process doc.
+3. **Rewrite the status page.** Do not edit the old one into shape; write a new `docs/STATUS.md` from
+   [`../templates/STATUS.md`](../templates/STATUS.md). Fill it from facts you can check now (what is deployed: ask the deployment;
+   what runs and what is next: the tracker; what waits: the owner), and archive the old status text whole (the moves of [Step 4](#step-4-move-and-archive) apply).
+   The old one is mostly landing logs, and a landing log is history.
+4. **Leave in the entry file:** the session-start pointer, the rules that apply to every change in a line or two each, the commit
+   convention, and pointers. Copy [`../templates/AGENTS.md`](../templates/AGENTS.md) for the shape and adapt it.
+5. **Replace the list of checks** with the generated catalogue ([`generated-docs.md`](./generated-docs.md)). Add the header
+   description to each check script, the comment above each command gate in `scripts/gates.list`, then run the generator.
+6. Add the freshness check and the placeholder check to `scripts/gates.list` (the runner runs them like any other).
 
 **Verify:** the entry file fits on one screen or close. Every removed rule appears in exactly one other place (`git grep`
-a distinctive phrase). The catalogue lists every check script (`ls scripts/check-* | wc -l` matches the entry count).
-The freshness check is green, and goes red if you edit a script header without regenerating.
+a distinctive phrase). Every decision in `decisions.md` links to something that exists, and the entry file holds none that it does
+not list. `docs/STATUS.md` has a "Last updated" line and no placeholders (`sh scripts/check-placeholders.sh`). The catalogue
+lists every check script (`ls scripts/check-*.sh | wc -l` matches the entry count). The freshness check is green, and goes red if
+you edit a script header without regenerating.
 
 ## Step 7: sweep the comments
 
 Do this last among the large steps, because the moves above fix many dead citations for free.
 
-1. Get the worklist: `check-history-comments.sh --inventory > sweep.txt`. Each line is `file:line  reason  text`.
+1. Get the worklist: `sh scripts/check-history-comments.sh --inventory > sweep.txt`. Each line is `file:line  reason  text`.
 2. Work file by file, or hand a closed list of files to each helper. For each line apply
    [archive, link, fold](./history-in-comments.md#the-three-moves):
    - the story goes to the item (create it if needed),
    - the comment cites the item by id,
    - the lasting reason stays, in present tense,
    - a comment with nothing to fold is deleted.
-3. After each batch: `check-history-comments.sh --update-baseline`. Commit the lower numbers with the batch.
-4. Fix dead citations as you meet them: `check-comment-refs.sh --inventory` lists them. The old path becomes the new path,
+3. After each batch: `sh scripts/check-history-comments.sh --update-baseline`. Commit the lower numbers with the batch.
+4. Fix dead citations as you meet them: `sh scripts/check-comment-refs.sh --inventory` lists them. The old path becomes the new path,
    or the id of the item that now holds the story.
 5. Mark the lines that are right as written (`history-ok: <reason>`), and nothing else.
 
@@ -190,14 +230,16 @@ file is replaced by the generated index and every old link lands on it.
 
 ## Step 9: final verification and review
 
-1. Run the full entry point. Require green on the whole tree, not only the fast checks.
+1. Run the full runner, `sh scripts/run-gates.sh`, with no hiding option. Require `ALL GREEN` and exit 0 on the whole tree, not
+   only the fast checks.
 2. Re-run the Step 0 commands. Put before and after in the cleanup item: docs count, total bytes, biggest file, history
    lines, dead citations.
 3. Read the docs map as a new contributor. Open each row. Does every row's one-line description match the file?
 4. Plant a violation of each check and see it go red: a dated comment, a dead citation, a broken link, a stale generated
    page, an index edit by hand.
 5. Have somebody who did not do the cleanup review it. The question: what in here would I have to ask someone about?
-6. Update the status page. Close the cleanup item with the landing commit.
+6. Check `docs/STATUS.md` against the repository as it now is (it was rewritten in Step 6; the moves since may have changed
+   what is true). Close the cleanup item with the landing commit.
 
 ## Staying clean
 
@@ -209,6 +251,9 @@ The cleanup is one-time. The checks make it permanent, by construction:
 | A comment cites a missing item or path | Reference check. |
 | A doc link breaks after a move | Link checker. |
 | The checks list goes stale | Generated catalogue plus freshness check. |
+| A check exists that nobody runs | The runner fails when a `scripts/check-*.sh` is not in its list. |
+| A doc is added and not found by anyone | Doc-map check: every doc under `docs/` is reachable from the map. |
+| A status paragraph grows a date | Dated-heading ratchet. |
 | The backlog index lies | Index freshness check. |
 | Debt creeps back after a sweep | The stale rule: a count that fell must be locked in. |
 | Finished research piles up | Review rule: notes without an open item are archived; see [`layout.md`](./layout.md). |
@@ -218,12 +263,14 @@ As counts reach zero, delete the baseline and make the check absolute.
 
 ## Ground rules for delegating
 
-A cleanup splits well. Split it into lanes with disjoint file sets, and say which files each lane owns and may not touch.
+A cleanup splits well. Split it into work streams with disjoint file sets, hand each to one helper, and say which files each
+stream owns and may not touch.
 
 - **Read-only inventories and audits** (Step 0, Step 2 draft): fit a small, fast model.
 - **Mechanical edits with a closed file list and a verifying check** (Step 4 moves, Step 7 sweeps): fit a small model
   too. The check is the reviewer.
 - **Design and judgment** (Step 3 layout, Step 5 trims of big docs, new checks): keep with a stronger model or a person.
-- **Serialize only for a reason you can name:** two lanes edit the same file, or one needs the other's output. Run the
-  checks once at the end of a batch, not in every lane.
+- **Serialize only for a reason you can name:** two streams edit the same file, or one needs the other's output. Run the full
+  runner once at the end of a batch, not in every stream (a helper runs `--fast`; see
+  [`gate-runner.md`](./gate-runner.md#making-the-full-run-affordable)).
 - **Capture the baseline before dispatching.** It cannot be recovered afterwards.

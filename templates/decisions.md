@@ -3,7 +3,8 @@
 <!--
 Template. An index, one line per decision: the decision, its date, and the item or doc that carries the reasoning.
 Current decisions only: a reversed or superseded decision leaves this page and stays in its item. The line is a pointer.
-When the item and the line disagree, the item wins and the line is fixed. Group the lines under a few headings. Delete
+When the item and the line disagree, the item wins and the line is fixed. Group the lines under a few headings. Copy it to
+docs/decisions.md and fill every <placeholder>; the check-placeholders check fails while one or this comment is left. Delete
 this comment.
 -->
 
@@ -23,4 +24,4 @@ only.** A decision lives in its item; the line here is the pointer.
 
 - <A decision about how work is done: merges, checks, who approves.> <YYYY-MM-DD> (item [<id>](./backlog/<NNN>-<slug>.md)).
 - Comments describe only the current state; history is linked to its item, not retold. <YYYY-MM-DD>
-  (`guides/history-in-comments.md`).
+  ([`guides/history-in-comments.md`](./guides/history-in-comments.md)).

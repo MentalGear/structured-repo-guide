@@ -1,4 +1,4 @@
 # refs baseline: dead tracker-id and repository-path citations in comments (shrink-only).
-# file<TAB>kind<TAB>ref. Fix the citation, then: comment_scan.py refs --update-baseline
+# file<TAB>kind<TAB>ref. Fix the citation, then: sh scripts/check-comment-refs.sh --update-baseline
 src/legacy.py	id	99
 src/legacy.py	path	docs/research/cache-notes.md

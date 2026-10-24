@@ -4,6 +4,10 @@
 for everything new and patient with what exists, and the allowed debt can only go down. Use it for any check where a
 sweep would be too big to do in one change.
 
+Two words, used throughout this guide. A **baseline** is a committed file that records the violations that exist today. A
+**ratchet** is a check that compares the tree with a baseline, accepts exactly what the baseline records, and forces the
+baseline to shrink as the debt is paid.
+
 ## Contents
 
 - [The pattern](#the-pattern)
@@ -11,6 +15,7 @@ sweep would be too big to do in one change.
 - [Three kinds of baseline](#three-kinds-of-baseline)
 - [Markers with reasons](#markers-with-reasons)
 - [A minimal ratchet in shell](#a-minimal-ratchet-in-shell)
+- [The check proves it can fail](#the-check-proves-it-can-fail)
 - [Working with baselines](#working-with-baselines)
 - [When not to use a ratchet](#when-not-to-use-a-ratchet)
 - [Pitfalls](#pitfalls)
@@ -114,6 +119,21 @@ awk -F'\t' '
 The first loop is the "new fails" rule, the second is the "stale fails" rule. Growth needs no flag here, because
 `--update-baseline` is the only writer and a reviewer sees the diff. The Python version adds the refusal to grow.
 
+## The check proves it can fail
+
+A self-test that someone ran once proves nothing about next month. So the wrapper that the runner calls
+(`check-history-comments.sh` and its siblings in [`../examples/documentation/`](../examples/documentation/README.md)) does two
+things on every normal run: it runs the check, then runs the tool's `--self-test` quietly. The self-test plants a violation per
+rule in a throwaway tree and requires the check to go red on each (and a clean tree to stay green). Quiet means its output is
+shown only when it fails; a failing self-test prints its log and turns the wrapper red with "this check can no longer be
+trusted to go red".
+
+- It costs about a second per check, and it catches the rot that nothing else does: a pattern edited until it matches nothing,
+  a baseline reader that stopped failing on a stale entry, a refactor that made the exit code always 0.
+- Maintenance flags (`--inventory`, `--update-baseline`) skip it. They are not the gate.
+- It proves the check can fail *as written*. It does not prove the check's patterns are complete: a scanner of common shapes
+  is green on a shape it does not know ([`history-in-comments.md`](./history-in-comments.md#limits-of-a-line-check)).
+
 ## Working with baselines
 
 - **Create** the baseline when the check lands: `--update-baseline` on the current tree. Commit it with the check.
@@ -139,7 +159,8 @@ The first loop is the "new fails" rule, the second is the "stale fails" rule. Gr
   silently. Keep the stale rule on.
 - **A baseline file that is itself scanned.** Exclude it, or the numbers in it trip the pattern.
 - **A check that only runs in some jobs.** A ratchet that is skipped on a branch can be outrun on that branch.
-  Run it in the one entry point that everyone and every agent runs.
+  Run it from the runner that everyone and every agent runs ([`gate-runner.md`](./gate-runner.md)).
 - **Updating the baseline to make the check green.** Shrinking is the only update that needs no explanation. A review
   rule: a baseline change goes with a code change that explains it.
-- **No self-test.** The check may be broken in a way that makes it pass. A planted violation proves it can fail.
+- **No self-test, or one nobody runs.** The check may be broken in a way that makes it pass. A planted violation proves it can
+  fail, and the wrapper must run it with every check ([above](#the-check-proves-it-can-fail)).

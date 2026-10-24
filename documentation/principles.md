@@ -13,6 +13,7 @@ and return to it when a decision is unclear: each of the other documents is one 
 - [6. A decisions index](#6-a-decisions-index)
 - [7. History lives in version control and the tracker](#7-history-lives-in-version-control-and-the-tracker)
 - [8. A class gets a check, not a patch](#8-a-class-gets-a-check-not-a-patch)
+- [9. Rules live in the repository](#9-rules-live-in-the-repository)
 - [How the principles fit together](#how-the-principles-fit-together)
 
 ## 1. Current state only
@@ -55,7 +56,9 @@ The construction has three parts:
 3. A **freshness check** that regenerates in memory and fails when the committed file differs.
 
 The page then carries a line that says it is generated and not to edit it by hand. A new check script or a new item needs no
-prose edit anywhere. Worked through in [`generated-docs.md`](./generated-docs.md) and
+prose edit anywhere. That also ends a recurring merge conflict: a check list kept by hand in the entry file is edited by
+every change that adds a check, so two such changes in flight collide on the same lines, and each change generated instead
+touches its own files. Worked through in [`generated-docs.md`](./generated-docs.md) and
 [`tracker-as-files.md`](./tracker-as-files.md).
 
 ## 4. The entry file only points
@@ -117,11 +120,26 @@ When the same problem shows up a second time, it is a class, not a coincidence. 
 2. Build the fix **by construction**: a check that makes the whole class unable to recur.
 3. Say which instances the construction covers, and which it does not.
 
-Existing debt that the check would flag goes in a **ratchet**: a baseline that can only shrink. The check is strict
-for new code and patient with old code. See [`ratchets.md`](./ratchets.md).
+Existing debt that the check would flag goes in a **ratchet**: a **baseline** (a committed file recording the violations that
+exist today) that can only shrink. The check is strict for new code and patient with old code. See
+[`ratchets.md`](./ratchets.md).
 
-Every check has a self-test that plants a violation and requires the check to go red. A check that has never been seen
-to fail proves nothing.
+Every check has a self-test that plants a violation and requires the check to go red, and the wrapper runs it with every
+check. A check that has never been seen to fail proves nothing. All the checks run from one **runner** and one list
+([`gate-runner.md`](./gate-runner.md)), so no check exists that nobody runs.
+
+## 9. Rules live in the repository
+
+A rule or a procedure that exists only in a chat, in an agent's session, or in a file in someone's home directory is lost
+with the session and the person. Write it where the next contributor will read it, and link it from where it applies.
+
+- A rule an agent learned from a correction goes into the entry file or its home doc in the same change, not into a private
+  memory that the next agent does not have.
+- A procedure ("how to cut a release", "how to run the suite") is a guide under `docs/guides/`, not a message pinned somewhere.
+- A tool's configuration that encodes a rule (a check, a hook, a CI file) is committed. Settings that only exist on one
+  machine are a hidden dependency: say in the repository what they must be.
+- Test: clone the repository into an empty directory with no history of conversations. Can a new contributor, human or agent,
+  find every rule that governs a change? If a rule is missing, it lives somewhere it must not.
 
 ## How the principles fit together
 
@@ -130,3 +148,4 @@ to fail proves nothing.
 - The entry file points to the status page (4, 5), to the decisions index (6) and to the generated catalogue (3).
 - Each rule lives once (2), so the entry file stays one screen.
 - All of it states the present (1), and the past is one link away (7).
+- All of it is in the repository (9), so a clean clone has the rules and the checks that enforce them.

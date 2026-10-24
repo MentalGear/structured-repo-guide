@@ -20,4 +20,5 @@ request had cached; an outage on 2025-01-13 was this bug.
 ## Detail
 
 The incident story belongs here and nowhere else. The code comment says only why the key is shaped as it is and
-cites "backlog 1".
+cites "backlog 1". The round's landing log is
+[archived](../../archive/rounds/round-1-landing-log.md).

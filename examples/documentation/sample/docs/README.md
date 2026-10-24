@@ -11,3 +11,4 @@ What is here and where to start. Start with [`STATUS.md`](./STATUS.md), then pic
 | [`backlog-done.md`](./backlog-done.md) | Generated index of the finished items. |
 | [`backlog/`](./backlog/) | One file per item; finished ones in `done/`. |
 | [`checks.md`](./checks.md) | Generated: every check and what it enforces. |
+| [`archive/`](./archive/README.md) | Finished material that code or items still cite, behind a "historical" banner, with its own index. |

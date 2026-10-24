@@ -18,6 +18,7 @@ closed it, checks can read it offline, and an agent can edit it with the same to
 - [The generated index](#the-generated-index)
 - [Citing an item from code](#citing-an-item-from-code)
 - [Linking research to items](#linking-research-to-items)
+- [Creating the first item](#creating-the-first-item)
 - [Adding, changing and closing an item](#adding-changing-and-closing-an-item)
 - [Trimming done items](#trimming-done-items)
 - [What the checks enforce](#what-the-checks-enforce)
@@ -36,7 +37,9 @@ docs/backlog/done/003-third-thing.md  a closed item
 The files are the source of truth. The two index files are only tables over them.
 
 A template is in [`../templates/backlog-item.md`](../templates/backlog-item.md). The script is
-[`../examples/documentation/backlog_index.py`](../examples/documentation/backlog_index.py).
+[`../examples/documentation/backlog_index.py`](../examples/documentation/backlog_index.py). `backlog_index.py --write`
+writes **both** index files (`docs/backlog.md` and `docs/backlog-done.md`) in one run, so there is never a reason to
+write one of them by hand.
 
 ## Front matter
 
@@ -135,7 +138,9 @@ carries the current reason:
 ```
 
 The reference check resolves every such citation to a file in the tracker, so a deleted or mistyped id goes red. Pick
-the word once. A project that uses "issue" or "ticket" passes it to the check with `--word`.
+the word once. A project that uses "issue" or "ticket" passes it to the check with `--word`, and writes `issue #12` in
+comments, because a bare `issue 12` is also ordinary English and is checked only when it is unmistakable
+([`history-in-comments.md`](./history-in-comments.md#citing-an-item-what-counts-as-a-citation)).
 
 The citation form is part of the contract. Use it in docs, commit messages and comments alike, so a search for
 `backlog 312` finds every place the item touches.
@@ -157,10 +162,29 @@ for f in docs/research/*.md; do
 done
 ```
 
+## Creating the first item
+
+The template is ready to run as item 1, so the first item needs no edit before it works. From the root of the repository:
+
+```sh
+mkdir -p docs/backlog/done
+cp /path/to/structured-repo-guide/templates/backlog-item.md docs/backlog/001-adopt-the-doc-checks.md
+# edit the title and the three sections, set `updated` to today, delete the template comment
+python3 -I scripts/backlog_index.py --write       # writes docs/backlog.md and docs/backlog-done.md
+python3 -I scripts/backlog_index.py --check       # exit 0
+```
+
+- **The name is `NNN-slug.md`:** the number zero-padded to three digits, a hyphen, a few lower-case words joined by hyphens.
+  The `id:` in the front matter is the same number without padding. The template says `id: 1`, so it passes as `001-...`;
+  saved under any other number it fails the index check until `id` is set to match.
+- **The first item is a good place for the work in hand:** the cleanup ([`cleanup-playbook.md`](./cleanup-playbook.md)) or
+  "adopt the doc checks". Its `## Status` carries the before-and-after numbers.
+- **A later item** uses the next free id (the command under [Ids](#ids)), and the same steps.
+
 ## Adding, changing and closing an item
 
-1. **Add.** Copy the template, name it with the next id, fill the front matter and the three sections, run
-   `backlog_index.py --write`, commit both.
+1. **Add.** Copy the template, name it with the next id, set `id` to match, fill the front matter and the three sections,
+   run `backlog_index.py --write`, commit the item and both indexes.
 2. **Change.** Edit the file, bump `updated`, regenerate, commit both.
 3. **Close.** Move to `done/`, set `status`, record the landing commit in `## Status`, regenerate, commit both. The code
    change that closes it carries a comment citing the id, if the comment needs a reason.

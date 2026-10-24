@@ -23,8 +23,10 @@ Why this matters:
 - [What is allowed](#what-is-allowed)
 - [Markers for deliberate exceptions](#markers-for-deliberate-exceptions)
 - [How the check works](#how-the-check-works)
+- [Citing an item: what counts as a citation](#citing-an-item-what-counts-as-a-citation)
 - [Day to day](#day-to-day)
 - [Limits of a line check](#limits-of-a-line-check)
+- [The page for your repository](#the-page-for-your-repository)
 
 ## The three moves
 
@@ -145,7 +147,12 @@ A comment line is history when it tells how the code changed instead of what it 
 | "was X, now Y" | `was 3px, now 2px` | A diff in prose. |
 | Fix narration | `before the fix`, `was renamed`, `since removed` | A changelog entry in the wrong file. |
 | Incident narration | `after the outage`, `we found that` | A post-mortem in the wrong file. |
-| Old behaviour | `old behaviour`, `old name` | Names what is gone. |
+| Old behaviour | `old behaviour`, `old name`, `kept for old callers` | Names what is gone, and "old" is relative to a day nobody will remember. |
+| A fix retold | `was fixed in 1.4`, `fixed in v2.3.1`, `was fixed upstream` | A changelog entry in the wrong file. Say what the code does and link the item. |
+| A removal retold | `removed in v3.0`, `deprecated since 2.1` | Same. |
+| Leftovers | `leftover from the old parser`, `remnant of the migration` | Defines the code by what surrounds it no more. |
+| "We" did something | `we switched to a map`, `we moved it`, `originally written as a loop` | A story told by its author. |
+| A narrative TODO | `TODO: tidy this up after the rewrite` | A TODO tied to an event instead of an item. Write `TODO(backlog 12)`. |
 
 Not history, and not flagged:
 
@@ -202,7 +209,8 @@ Two checks share one comment extractor, so what counts as a comment is decided i
 - **History check** (`check-history-comments.sh`). Counts, per file, the comment lines that carry a date, a commit
   hash or a flagged phrase. The counts are in a baseline file, `path<TAB>count`. It fails when a file's count rises,
   when a new file has any, and when a count fell while the baseline still allows the old number (run
-  `--update-baseline` to lock the drop in).
+  `sh scripts/check-history-comments.sh --update-baseline` to lock the drop in; that is the command in your
+  repository once the scripts are copied into `scripts/`).
 - **Reference check** (`check-comment-refs.sh`). Every cited tracker id must have a file in the tracker. Every repository
   path that a comment names must exist. Dead ones that predate the check are in a second baseline.
 
@@ -211,25 +219,54 @@ is not a comment. A Python docstring is read as a comment. It skips vendored and
 docs are where history may live.
 
 The scripts are in [`../examples/documentation/`](../examples/documentation/README.md). Each has a `--self-test` that plants a
-violation and requires the check to go red.
+violation and requires the check to go red, and each wrapper runs it quietly after the check
+([`ratchets.md`](./ratchets.md#the-check-proves-it-can-fail)).
+
+## Citing an item: what counts as a citation
+
+The reference check resolves every `backlog 312` in a comment to a file. The word before the number is a choice (`backlog`,
+`issue`, `ticket`), and some of those words are ordinary English: "the second issue 5 times larger" is not a citation. So a
+bare `<word> N` is checked only when it is unmistakable, otherwise the check would report dead ids that are quantities:
+
+- it is written with a hash, `issue #312`; or
+- the comment block also names the tracker (the tracker directory's name, such as "backlog", or the word "tracker"); or
+- N has three or more digits, is at most 25 above the highest existing id (it looks like an id) and does not read as a
+  quantity (`issue 450 times`, `issue 30 of 40`).
+
+With the default word, `backlog`, the word itself names the tracker, so every `backlog N` is checked. A project whose word
+is `issue` writes `issue #12` in comments and gets exactly the citations it meant checked. A second tracker (defect records,
+below) is a second run of the same check with `--tracker docs/issues --word issue --baseline scripts/baselines/issue-refs.tsv`.
 
 ## Day to day
 
 - The check went red on your change. It prints the file and each hit line with its reason (`[date]`, `[used to]`).
-  Rewrite the line with the three moves. If you cleaned a file so its count fell, run `--update-baseline` and commit the
-  baseline file with the change.
+  Rewrite the line with the three moves. If you cleaned a file so its count fell, run
+  `sh scripts/check-history-comments.sh --update-baseline` and commit the baseline file with the change.
 - To see all the debt: `check-history-comments.sh --inventory` prints `file:line  reason  text` for every counted line.
   That is the worklist for a sweep. See [`cleanup-playbook.md`](./cleanup-playbook.md).
-- A baseline that must grow needs `--update-baseline --allow-grow`, and the commit message says why. Prefer a marker
+- A baseline that must grow needs `sh scripts/check-history-comments.sh --update-baseline --allow-grow`, and the commit message says why. Prefer a marker
   with a reason.
 - In review, ask of every new comment: "Does this still read true after the next change?" If it narrates, it will not.
 
 ## Limits of a line check
 
 - The check sees phrases and dates. It cannot judge whether a present-tense reason is true. Review does that.
-- A comment can retell history in words no pattern matches. The patterns catch the common shapes. Add one when review
-  finds a new shape twice.
+- **Green means "no common shape found". It does not mean the comments are clean.** The check knows dates, hashes and a
+  list of phrases (the table above). A comment can retell history in words no pattern matches. The patterns catch the common
+  shapes; add one when review finds a new shape twice, with its sentence in the scanner's self-test. A reviewer still reads
+  the comments in a diff, and a sweep still reads the files it touches: the check keeps what was found from coming back, and
+  finds nothing that its patterns do not describe.
+- Some patterns trade a few false positives for coverage, and "old" in `kept for old callers` is one of them: "old" ages, so
+  the rewrite names the thing ("callers older than v3") and the marker is for the rare line that must stay as it is.
 - Code inside a string of another language, and multi-line quoted strings in shell, are not scanned. The gaps only make
   the check more lenient.
-- Prose docs are not scanned. Their rule is in [`principles.md`](./principles.md): living docs state the current
-  state, and history goes to the archive.
+- Prose docs are not scanned for narration. Their rule is in [`principles.md`](./principles.md): living docs state the
+  current state, and history goes to the archive. One shape is checked by its own ratchet: a dated heading or lead-in
+  (`## Status (2025-03-02)`) in a living doc (`check-dated-headings.sh`).
+
+## The page for your repository
+
+Comments cite a guide that says the rule in your words, in your repository, so the rule has a home that does not depend on this
+one. Copy [`../templates/history-in-comments.md`](../templates/history-in-comments.md) to `docs/guides/history-in-comments.md`,
+adapt its examples to your language, and link it from the entry file. It is one page: the rule, the three moves, the table of
+what to write instead, and the markers.

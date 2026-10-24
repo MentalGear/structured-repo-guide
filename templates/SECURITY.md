@@ -1,10 +1,10 @@
-<!--
-Template. Copy this file to the root of your repository as SECURITY.md and replace every <ANGLE-BRACKET VALUE>.
-Delete this comment. Guidance: security/vulnerability-reporting.md of structured-repo-guide.
+<!-- TEMPLATE: copy this file to the root of your repository as SECURITY.md, replace every <ANGLE-BRACKET VALUE> with
+real text (the text between the brackets says what goes there), and delete this comment. Guidance:
+security/vulnerability-reporting.md of structured-repo-guide.
 
-Turn the playbook path in the last section into a real Markdown link to your playbook file, written as a relative path such
-as ./docs/supply-chain.md. The controls-table check requires that SECURITY.md contains that path.
--->
+The playbook path in the last section must be a real Markdown link to your playbook file, written as a relative path such as
+./docs/supply-chain.md. The controls-table check requires that SECURITY.md contains that path, and fails while a <...>
+placeholder or this comment is left in the file. -->
 
 # Security policy
 
@@ -46,4 +46,4 @@ only that you have a security report and asks for a private channel, and put **n
 what is not yet covered. Do not put counts here: the table has them.>
 
 The threat model, the full controls table (what each control stops, the script that enforces it, and whether it is enforced,
-manual or planned) and what is deliberately out of scope are in `<PATH-TO-YOUR-PLAYBOOK, for example docs/supply-chain.md>`.
+manual or planned) and what is deliberately out of scope are in <LINK TO YOUR PLAYBOOK, for example [docs/supply-chain.md](./docs/supply-chain.md)>.

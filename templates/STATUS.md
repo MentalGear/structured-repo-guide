@@ -1,9 +1,11 @@
 # Status: where we are
 
 <!--
-Template. One page, edited at every merge or round change by whoever owns merges. It says what is deployed, what runs,
-what is next and what waits for a person. It does not say what each batch contained (the log and the tracker do), and it
-holds no item-level state (the item does). Keep it under one screen. Delete this comment.
+Template. One page, edited at every merge or round change by whoever merges. It says what is deployed, what runs, what is next
+and what waits for a person. It does not say what each batch contained (the log and the tracker do), and it holds no item-level
+state (the item does). Keep it under one screen. Copy it to docs/STATUS.md, fill every <placeholder> with what is true today
+(from version control and the running system, not from an old status paragraph) and delete sections that do not apply. The
+check-placeholders check fails while a placeholder or this comment is left. Delete this comment.
 -->
 
 **Living page. Update it with the change that makes it true. If "Last updated" is old, treat the page as stale and check

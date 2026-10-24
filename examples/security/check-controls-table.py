@@ -21,7 +21,11 @@ It fails on:
      with the wrong number of cells, an id used anywhere in the document without a row, and a
      `Counts ...: N enforced, N manual, N planned` line that disagrees with the table;
   6. a missing required heading (`--heading`, repeatable), or a security policy file
-     (`--security`) that is missing or does not contain the playbook path (`--playbook-link`).
+     (`--security`) that is missing, does not contain the playbook path (`--playbook-link`), or
+     still holds an unreplaced `<...>` placeholder or the template's `<!-- TEMPLATE` comment
+     (code spans, code fences, autolinks such as `<https://...>` and a few HTML tags are
+     skipped): the template's own placeholder line contains the playbook path, so the path
+     test alone passes on an unedited template.
 
 `--self-test` copies the tree to a temporary directory, applies a list of mutations one at a
 time, and requires every mutation to turn the check red for the intended reason and the
@@ -47,6 +51,11 @@ import tempfile
 STATUSES = ("enforced", "manual", "planned")
 COLUMNS = ["id", "control", "threat it stops", "enforcing script", "config", "runs in", "status", "evidence"]
 ID_RE = re.compile(r"C\d\d")
+PLACEHOLDER_RE = re.compile(r"<(?=[^\s<>!/])[^<>]{0,400}?(?<=\S)>")
+OK_ANGLE_RE = re.compile(
+    r"<(?:https?://|mailto:)[^\s<>]+>"                      # autolink
+    r"|<[^\s<>@]+@[^\s<>@]+\.[A-Za-z]{2,}>"                 # e-mail autolink
+    r"|<(?:br|hr|details|summary|kbd|sub|sup|img|strong|em)\b[^<>]*>")  # a few HTML tags
 
 
 def read(path):
@@ -78,6 +87,21 @@ def path_tokens(cell):
 def exists(root, path):
     full = os.path.join(root, path)
     return bool(glob.glob(full)) if "*" in path else os.path.exists(full)
+
+
+def placeholder_problems(text):
+    """Unreplaced template placeholders in a policy file, as problem strings."""
+    text = re.sub(r"```.*?```|~~~.*?~~~", "", text, flags=re.S)
+    text = re.sub(r"`[^`\n]*`", "", text)
+    out = []
+    if re.search(r"<!--\s*TEMPLATE", text):
+        out.append("still holds the template's `<!-- TEMPLATE ... -->` comment; delete it")
+    text = re.sub(r"<!--.*?-->", "", text, flags=re.S)
+    left = [m.group(0) for m in PLACEHOLDER_RE.finditer(text) if not OK_ANGLE_RE.fullmatch(m.group(0))]
+    if left:
+        shown = ", ".join(repr(t if len(t) <= 40 else t[:37] + "...") for t in left[:3])
+        out.append(f"has {len(left)} unreplaced `<...>` placeholder(s), for example {shown}; replace each (an HTML tag goes in a code span)")
+    return out
 
 
 def split_row(line):
@@ -194,8 +218,11 @@ def check(root, cfg, extra_declared=()):
         sec = os.path.join(root, cfg.security)
         if not os.path.exists(sec):
             problems.append(f"{cfg.security} does not exist")
-        elif cfg.playbook_link not in read(sec):
-            problems.append(f"{cfg.security} does not link {cfg.playbook_link}")
+        else:
+            policy = read(sec)
+            if cfg.playbook_link not in policy:
+                problems.append(f"{cfg.security} does not link {cfg.playbook_link}")
+            problems += [f"{cfg.security} {p}" for p in placeholder_problems(policy)]
     return problems, counts, rows
 
 
@@ -266,6 +293,14 @@ def self_test(root, cfg, quiet=False):
     def security_unlinked(tmp):
         write(os.path.join(tmp, cfg.security), "# Security\n")
 
+    def policy_placeholder(tmp):
+        p = os.path.join(tmp, cfg.security)
+        write(p, read(p) + "\nReport privately to <SECURITY CONTACT>.\n")
+
+    def policy_template_comment(tmp):
+        p = os.path.join(tmp, cfg.security)
+        write(p, "<!-- TEMPLATE: delete this comment -->\n" + read(p))
+
     def duplicate_id(tmp):
         rid, other = rows[0]["id"], rows[1]["id"]
         edit_doc(tmp, lambda d: rewrite_row(d, other, lambda c: c.__setitem__(0, rid)))
@@ -300,6 +335,8 @@ def self_test(root, cfg, quiet=False):
         cases.append(("a gate row's script is not in the gate list", "is not in the gate list", not_in_gates, ()))
     if cfg.security:
         cases.append(("the security policy does not link the playbook", "does not link", security_unlinked, ()))
+        cases.append(("the security policy keeps a `<...>` placeholder", "unreplaced", policy_placeholder, ()))
+        cases.append(("the security policy keeps the template comment", "TEMPLATE", policy_template_comment, ()))
 
     bad = 0
     for name, want, mutate, extra in cases:

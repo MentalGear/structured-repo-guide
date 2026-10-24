@@ -11,6 +11,13 @@ Rules:
     contract for consumers and are skipped)
       exact `1.2.3` (a pre-release suffix is fine), `npm:alias@1.2.3`, or a local `workspace:`,
       `file:`, `link:`, `portal:` spec. Ranges, tags, git, URL and tarball specs are red.
+      The override tables (`overrides`, nested ones included, `resolutions`, `pnpm.overrides`) are
+      read the same way: an override replaces what a dependency asked for, so a range there
+      re-opens every pin below it. `$name` references and `-` (remove) are fine.
+  pyproject.toml (`[project] dependencies`, `[project.optional-dependencies]`,
+    `[dependency-groups]`, `[build-system] requires`)
+      each entry is `name==1.2.3` like a requirements line. A published library declares ranges
+      on purpose: pass the files to check with `--pyproject`/`--pip`, or allowlist, for those.
   requirements.txt (any file named requirements*.txt)
       `name==1.2.3` (extras and `;` markers allowed, `--hash=` options ignored). `>=`, `~=`,
       `==1.*`, no version, `name @ url`, `-e` editable installs, `--extra-index-url`,
@@ -20,12 +27,25 @@ Rules:
   Cargo.toml (dependencies, dev-dependencies, build-dependencies, workspace.dependencies, and
     the same under target.*)
       `=1.2.3`; `{ workspace = true }` and `{ path = ".." }` are fine; `git` needs a 40-hex `rev`;
-      anything else is red. With `--cargo-lock Cargo.lock` (the library mode) a caret or bare
+      anything else is red. `[patch.<source>]` and `[replace]` entries follow the same rules: a patch
+      with `git` and a `branch` replaces a pinned crate with whatever the branch points at. With `--cargo-lock Cargo.lock` (the library mode) a caret or bare
       `1.2.3` is also fine when it equals a version of that crate in the lock, so the floor a
       consumer may resolve is exactly the version the checks ran on.
-  pnpm-workspace.yaml (`--pnpm-workspace FILE`)
+  pnpm-workspace.yaml (`--pnpm-workspace FILE`, repeatable)
       `minimumReleaseAge` is at least `--min-release-age` minutes (default 43200, 30 days) and
       `onlyBuiltDependencies` is the explicit empty list `[]` (no dependency runs an install script).
+      An `overrides:` mapping, when present, must hold exact versions.
+  Required settings (`--require-setting FILE:KEY=VALUE`, repeatable)
+      FILE is relative to --root. A `.yaml`/`.yml` file is read for a top-level `key: value`,
+      anything else (`.npmrc`) for a `key=value` line. Fails when the file or key is missing or
+      the value differs: `--require-setting pnpm-workspace.yaml:trustPolicy=no-downgrade`,
+      `--require-setting .npmrc:save-exact=true`. Whether your tool version knows the key is
+      for you to confirm; the script only keeps the line from being removed.
+
+Not read, so not checked (the method applies; the script does not cover them): Go, Maven, Gradle,
+Ruby, PHP and .NET manifests; `Pipfile`, `setup.py`, `setup.cfg`, `[tool.poetry]` tables and pip
+constraints files; `peerDependencies`; `yarn.lock`. The script cannot tell a real git `rev` from a
+made-up 40-hex string, and it does not read lockfiles (`--cargo-lock` only reads versions).
 
 Allowlist (`--allow FILE`), one entry per line, `#` starts a comment line:
       relative/path/to/manifest|dependency-name|reason why this cannot be exact
@@ -33,10 +53,11 @@ Allowlist (`--allow FILE`), one entry per line, `#` starts a comment line:
   exceptions cannot outlive the problem.
 
 Usage:
-  check-pins.py [--root DIR] [--allow FILE] [--cargo-lock FILE] [--pnpm-workspace FILE]
-                [--min-release-age MINUTES] [--pip-require-hashes] [--npm FILE]... [--pip FILE]... [--cargo FILE]...
-  With no --npm/--pip/--cargo, every package.json, requirements*.txt and Cargo.toml under --root
-  is checked (node_modules, target, .git and virtualenvs skipped).
+  check-pins.py [--root DIR] [--allow FILE] [--cargo-lock FILE] [--pnpm-workspace FILE]...
+                [--min-release-age MINUTES] [--pip-require-hashes] [--npm FILE]... [--pip FILE]...
+                [--cargo FILE]... [--pyproject FILE]... [--require-setting FILE:KEY=VALUE]...
+  With no --npm/--pip/--cargo/--pyproject, every package.json, requirements*.txt, Cargo.toml and
+  pyproject.toml under --root is checked (node_modules, target, .git and virtualenvs skipped).
   check-pins.py --self-test        builds fixtures in a temp dir; every mutation must turn red.
 
 Exit status: 0 clean, 1 violations, 2 usage or unreadable input.
@@ -67,6 +88,37 @@ def rel(root, path):
 
 # ---- package.json -------------------------------------------------------------------------------
 
+def npm_spec_problem(spec):
+    """Why an npm dependency spec is not an exact pin, or None when it is."""
+    spec = str(spec).strip()
+    if re.fullmatch(SEMVER, spec):
+        return None
+    if re.match(r"(workspace|file|link|portal):", spec):
+        return None
+    if spec.startswith("npm:") and re.fullmatch(SEMVER, spec.rsplit("@", 1)[-1]):
+        return None
+    if re.match(r"(git|git\+\w+|github|gitlab|bitbucket|https?|ssh):|^[\w.-]+/[\w.-]+(#.*)?$", spec):
+        return f"non-registry source {spec!r}; use a registry release pinned to x.y.z"
+    return f"{spec!r} is not an exact version (x.y.z)"
+
+
+def npm_override_problems(table, label, prefix=""):
+    """Override tables: `name: spec`, or `name: { ".": spec, child: spec }` (npm nests them)."""
+    out = []
+    for name, spec in (table or {}).items():
+        where = f"{prefix}{name}"
+        if isinstance(spec, dict):
+            out += npm_override_problems(spec, label, prefix=where + " > ")
+            continue
+        spec = str(spec).strip()
+        if spec == "-" or spec.startswith("$"):  # pnpm: remove the dependency; npm: reuse the direct dependency's spec
+            continue
+        why = npm_spec_problem(spec)
+        if why:
+            out.append((where, f"{label}: {why}"))
+    return out
+
+
 def check_npm(path):
     out = []
     try:
@@ -75,17 +127,12 @@ def check_npm(path):
         return [("<file>", f"cannot parse: {err}")]
     for section in ("dependencies", "devDependencies", "optionalDependencies"):
         for name, spec in (data.get(section) or {}).items():
-            spec = str(spec).strip()
-            if re.fullmatch(SEMVER, spec):
-                continue
-            if re.match(r"(workspace|file|link|portal):", spec):
-                continue
-            if spec.startswith("npm:") and re.fullmatch(SEMVER, spec.rsplit("@", 1)[-1]):
-                continue
-            if re.match(r"(git|git\+\w+|github|gitlab|bitbucket|https?|ssh):|^[\w.-]+/[\w.-]+(#.*)?$", spec):
-                out.append((name, f"{section}: non-registry source {spec!r}; use a registry release pinned to x.y.z"))
-            else:
-                out.append((name, f"{section}: {spec!r} is not an exact version (x.y.z)"))
+            why = npm_spec_problem(spec)
+            if why:
+                out.append((name, f"{section}: {why}"))
+    out += npm_override_problems(data.get("overrides"), "overrides")
+    out += npm_override_problems(data.get("resolutions"), "resolutions")
+    out += npm_override_problems((data.get("pnpm") or {}).get("overrides"), "pnpm.overrides")
     return out
 
 
@@ -108,6 +155,14 @@ def logical_lines(text):
         yield buf.strip()
 
 
+def pip_requirement_problem(line):
+    """Why one PEP 508 requirement (no options, no hashes) is not `name==x.y.z`, or None."""
+    m = REQ_PIN.match(line)
+    if m and "*" not in m.group(3):
+        return None
+    return f"{line!r} is not pinned with ==x.y.z"
+
+
 def check_pip(path, require_hashes=False):
     out = []
     try:
@@ -127,13 +182,40 @@ def check_pip(path, require_hashes=False):
             elif opt in ("-e", "--editable"):
                 out.append((line.split(None, 1)[1] if " " in line else "-e", "editable install is not a pinned release"))
             continue
-        m = REQ_PIN.match(line)
-        if m and "*" not in m.group(3):
+        why = pip_requirement_problem(line)
+        if why is None:
             if require_hashes and not has_hash:
+                m = REQ_PIN.match(line)
                 out.append((m.group(1), f"{line!r} has no --hash=sha256:... (pip --require-hashes would refuse the file)"))
             continue
         n = REQ_NAME.match(line)
-        out.append((n.group(1) if n else line, f"{line!r} is not pinned with ==x.y.z"))
+        out.append((n.group(1) if n else line, why))
+    return out
+
+
+# ---- pyproject.toml -----------------------------------------------------------------------------
+
+def check_pyproject(path):
+    out = []
+    try:
+        doc = tomllib.load(open(path, "rb"))
+    except (OSError, tomllib.TOMLDecodeError) as err:
+        return [("<file>", f"cannot parse: {err}")]
+    groups = [("[project] dependencies", (doc.get("project") or {}).get("dependencies"))]
+    for extra, reqs in ((doc.get("project") or {}).get("optional-dependencies") or {}).items():
+        groups.append((f"[project.optional-dependencies] {extra}", reqs))
+    for group, reqs in (doc.get("dependency-groups") or {}).items():
+        groups.append((f"[dependency-groups] {group}", reqs))
+    groups.append(("[build-system] requires", (doc.get("build-system") or {}).get("requires")))
+    for label, reqs in groups:
+        for req in reqs or []:
+            if not isinstance(req, str):  # {include-group = "..."}
+                continue
+            req = req.strip()
+            why = pip_requirement_problem(req)
+            if why:
+                n = REQ_NAME.match(req)
+                out.append((n.group(1) if n else req, f"{label}: {why}"))
     return out
 
 
@@ -158,6 +240,12 @@ def dep_tables(doc):
         for key in ("dependencies", "dev-dependencies", "build-dependencies"):
             if key in tgt:
                 yield f"target.{tname}.{key}", tgt[key]
+    # [patch.<source>] swaps a dependency for another source everywhere in the graph; [replace] is its
+    # deprecated spelling. Both are held to the rules of an ordinary dependency.
+    for source, table in (doc.get("patch") or {}).items():
+        yield f"patch.{source}", table
+    if "replace" in doc:
+        yield "replace", doc["replace"]
 
 
 def check_cargo(path, lock=None):
@@ -204,7 +292,7 @@ def check_pnpm(path, min_age):
         lines = open(path, encoding="utf-8").read().splitlines()
     except OSError as err:
         return [("<file>", f"cannot read: {err}")]
-    top, current = {}, None
+    top, current, overrides = {}, None, {}
     for l in lines:
         if not l.strip() or l.lstrip().startswith("#"):
             continue
@@ -212,6 +300,10 @@ def check_pnpm(path, min_age):
         if m:
             current = m.group(1)
             top[current] = [m.group(2)] if m.group(2) else []
+        elif current == "overrides":
+            om = re.match(r"""^\s+("[^"]+"|'[^']+'|[^:\s][^:]*?)\s*:\s*(.*?)\s*(\s#.*)?$""", l)
+            if om:
+                overrides[om.group(1).strip("\"'")] = om.group(2).strip().strip("\"'")
         elif current and l.lstrip().startswith("- "):
             top[current].append(l.strip())
     age = top.get("minimumReleaseAge")
@@ -224,7 +316,35 @@ def check_pnpm(path, min_age):
         out.append(("onlyBuiltDependencies", "is not set; write the explicit empty list `[]`"))
     elif built != ["[]"]:
         out.append(("onlyBuiltDependencies", f"is {built}; the list must be empty (no dependency install scripts)"))
+    out += npm_override_problems(overrides, "overrides")
     return out
+
+
+def check_setting(root, spec):
+    """`FILE:KEY=VALUE` must hold in FILE (yaml top level, or ini-style key=value)."""
+    m = re.fullmatch(r"([^:]+):([^=\s]+)=(.+)", spec)
+    if not m:
+        return [(spec, "--require-setting wants FILE:KEY=VALUE")]
+    f, key, want = m.groups()
+    path = os.path.join(root, f)
+    try:
+        lines = open(path, encoding="utf-8").read().splitlines()
+    except OSError:
+        return [(f"{f}:{key}", f"{f} does not exist; it must set {key}={want}")]
+    got = None
+    for l in lines:
+        l = re.sub(r"(^|\s)#.*$", "", l).rstrip()
+        if f.endswith((".yaml", ".yml")):
+            mm = re.match(r"^%s:\s*(.*)$" % re.escape(key), l)
+        else:
+            mm = re.match(r"^\s*%s\s*=\s*(.*)$" % re.escape(key), l)
+        if mm:
+            got = mm.group(1).strip().strip("\"'")
+    if got is None:
+        return [(f"{f}:{key}", f"{key} is not set in {f}; want {want}")]
+    if got != want:
+        return [(f"{f}:{key}", f"{key} is {got!r} in {f}; want {want}")]
+    return []
 
 
 # ---- allowlist and driver -----------------------------------------------------------------------
@@ -245,7 +365,7 @@ def load_allow(path):
 
 
 def discover(root):
-    npm, pip, cargo = [], [], []
+    npm, pip, cargo, pyproject = [], [], [], []
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
         for f in sorted(filenames):
@@ -256,10 +376,12 @@ def discover(root):
                 pip.append(p)
             elif f == "Cargo.toml":
                 cargo.append(p)
-    return npm, pip, cargo
+            elif f == "pyproject.toml":
+                pyproject.append(p)
+    return npm, pip, cargo, pyproject
 
 
-def run(root, npm, pip, cargo, allow_path, lock_path, pnpm_path, min_age, require_hashes=False):
+def run(root, npm, pip, cargo, pyproject, allow_path, lock_path, pnpm_paths, min_age, require_hashes=False, settings=()):
     lock = locked_versions(lock_path) if lock_path else None
     found = []
     for p in npm:
@@ -268,8 +390,12 @@ def run(root, npm, pip, cargo, allow_path, lock_path, pnpm_path, min_age, requir
         found += [(rel(root, p), n, m) for n, m in check_pip(p, require_hashes)]
     for p in cargo:
         found += [(rel(root, p), n, m) for n, m in check_cargo(p, lock)]
-    if pnpm_path:
-        found += [(rel(root, pnpm_path), n, m) for n, m in check_pnpm(pnpm_path, min_age)]
+    for p in pyproject:
+        found += [(rel(root, p), n, m) for n, m in check_pyproject(p)]
+    for p in pnpm_paths:
+        found += [(rel(root, p), n, m) for n, m in check_pnpm(p, min_age)]
+    for spec in settings:
+        found += [(spec.split(":", 1)[0], n, m) for n, m in check_setting(root, spec)]
     entries, problems = load_allow(allow_path)
     used = set()
     for f, n, m in found:
@@ -281,7 +407,8 @@ def run(root, npm, pip, cargo, allow_path, lock_path, pnpm_path, min_age, requir
     for i, (ep, en, reason) in enumerate(entries):
         if i not in used:
             problems.append(f"{allow_path}: stale entry `{ep}|{en}`: it matches no violation, delete it")
-    return problems, len(found), len(used), len(npm) + len(pip) + len(cargo) + (1 if pnpm_path else 0)
+    n_files = len(npm) + len(pip) + len(cargo) + len(pyproject) + len(pnpm_paths) + len(set(x.split(':', 1)[0] for x in settings))
+    return problems, len(found), len(used), n_files
 
 
 # ---- self-test ----------------------------------------------------------------------------------
@@ -298,6 +425,10 @@ FIXTURE = {
                        '[dev-dependencies]\ntempfile = "=3.8.0"\n',
     "rust/Cargo.lock": 'version = 3\n[[package]]\nname = "serde"\nversion = "1.0.200"\n[[package]]\nname = "tempfile"\nversion = "3.8.0"\n',
     "js/pnpm-workspace.yaml": "minimumReleaseAge: 43200\nonlyBuiltDependencies: []\n",
+    "py/pyproject.toml": '[project]\nname = "x"\nversion = "0.1.0"\ndependencies = ["requests==2.32.3", "flask[async]==3.0.3; python_version >= \'3.9\'"]\n'
+                         '[project.optional-dependencies]\ndev = ["pytest==8.2.0"]\n'
+                         '[dependency-groups]\ntest = ["pytest==8.2.0", {include-group = "dev"}]\n'
+                         '[build-system]\nrequires = ["setuptools==70.0.0"]\n',
 }
 
 
@@ -305,7 +436,7 @@ def self_test():
     cases_run = 0
     bad = 0
 
-    def case(name, want, files=None, allow=None, lock=False, pnpm=True, hashes=False):
+    def case(name, want, files=None, allow=None, lock=False, pnpm=("js/pnpm-workspace.yaml",), hashes=False, settings=()):
         nonlocal cases_run, bad
         cases_run += 1
         tmp = tempfile.mkdtemp(prefix="pins-selftest-")
@@ -318,10 +449,10 @@ def self_test():
             if allow is not None:
                 ap = os.path.join(tmp, "pins.allow")
                 open(ap, "w", encoding="utf-8").write(allow)
-            npm, pip, cargo = discover(tmp)
-            problems, *_ = run(tmp, npm, pip, cargo, ap,
+            npm, pip, cargo, pyproject = discover(tmp)
+            problems, *_ = run(tmp, npm, pip, cargo, pyproject, ap,
                                os.path.join(tmp, "rust/Cargo.lock") if lock else None,
-                               os.path.join(tmp, "js/pnpm-workspace.yaml") if pnpm else None, 43200, hashes)
+                               [os.path.join(tmp, f) for f in pnpm], 43200, hashes, settings)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
         ok = (not problems) if want is None else any(want in p for p in problems)
@@ -361,6 +492,52 @@ def self_test():
     case("pnpm install scripts allowed", "onlyBuiltDependencies",
          {"js/pnpm-workspace.yaml": "minimumReleaseAge: 43200\nonlyBuiltDependencies:\n  - esbuild\n"})
     case("pnpm install-script list missing", "is not set; write", {"js/pnpm-workspace.yaml": "minimumReleaseAge: 43200\n"})
+    # the holes a reviewer found: overrides, patch tables, pyproject
+    case("cargo [patch] with a branch", "needs `rev`", {"rust/Cargo.toml": '[dependencies]\nserde = "=1.0.200"\n'
+         '[patch.crates-io]\nserde = { git = "https://x.invalid/serde", branch = "main" }\n'})
+    case("cargo [patch] with a git rev is green", None, {"rust/Cargo.toml": '[dependencies]\nserde = "=1.0.200"\n'
+         '[patch.crates-io]\nserde = { git = "https://x.invalid/serde", rev = "0123456789abcdef0123456789abcdef01234567" }\n'})
+    case("cargo [patch] with a range", "is not exact", {"rust/Cargo.toml": '[dependencies]\nserde = "=1.0.200"\n'
+         '[patch."https://x.invalid/index"]\nserde = { version = "1.0" }\n'})
+    case("cargo [replace]", "needs `rev`", {"rust/Cargo.toml": '[dependencies]\nserde = "=1.0.200"\n'
+         '[replace]\n"serde:1.0.200" = { git = "https://x.invalid/serde", tag = "v1" }\n'})
+    case("npm overrides with a range", "overrides", {"js/package.json": json.dumps(
+         {"dependencies": {"left": "1.2.3"}, "overrides": {"deep": "^2.0.0"}})})
+    case("npm nested overrides with a range", "overrides", {"js/package.json": json.dumps(
+         {"dependencies": {"left": "1.2.3"}, "overrides": {"left": {".": "1.2.3", "deep": ">=2"}}})})
+    case("yarn resolutions with a tag", "resolutions", {"js/package.json": json.dumps(
+         {"dependencies": {"left": "1.2.3"}, "resolutions": {"deep": "latest"}})})
+    case("pnpm.overrides with a range", "pnpm.overrides", {"js/package.json": json.dumps(
+         {"dependencies": {"left": "1.2.3"}, "pnpm": {"overrides": {"deep@^1": "~1.4.0"}}})})
+    case("exact overrides, a reference and a removal are green", None, {"js/package.json": json.dumps(
+         {"dependencies": {"left": "1.2.3"}, "overrides": {"deep": "2.0.1", "left": "$left"},
+          "pnpm": {"overrides": {"other": "-", "pinned@1": "npm:real@1.4.0"}}})})
+    case("pnpm-workspace overrides with a range", "overrides", {"js/pnpm-workspace.yaml":
+         "minimumReleaseAge: 43200\nonlyBuiltDependencies: []\noverrides:\n  \"@scope/pkg@<2\": \"^2.1.0\"\n"})
+    case("pnpm-workspace exact overrides are green", None, {"js/pnpm-workspace.yaml":
+         "minimumReleaseAge: 43200\nonlyBuiltDependencies: []\noverrides:\n  '@scope/pkg': 2.1.0  # reason\n"})
+    case("a second pnpm-workspace with a low age", "minimumReleaseAge",
+         {"web/pnpm-workspace.yaml": "minimumReleaseAge: 10\nonlyBuiltDependencies: []\n"},
+         pnpm=("js/pnpm-workspace.yaml", "web/pnpm-workspace.yaml"))
+    case("pyproject dependency range", "[project] dependencies", {"py/pyproject.toml":
+         '[project]\nname = "x"\nversion = "1"\ndependencies = ["requests>=2"]\n'})
+    case("pyproject optional dependency range", "optional-dependencies", {"py/pyproject.toml":
+         '[project]\nname = "x"\nversion = "1"\n[project.optional-dependencies]\ndev = ["pytest"]\n'})
+    case("pyproject dependency group range", "dependency-groups", {"py/pyproject.toml":
+         '[dependency-groups]\ntest = ["pytest~=8.0"]\n'})
+    case("pyproject build requirement range", "build-system", {"py/pyproject.toml":
+         '[build-system]\nrequires = ["setuptools>=61"]\n'})
+    case("a required yaml setting that holds is green", None,
+         {"js/pnpm-workspace.yaml": "minimumReleaseAge: 43200\nonlyBuiltDependencies: []\ntrustPolicy: no-downgrade\n"},
+         settings=("js/pnpm-workspace.yaml:trustPolicy=no-downgrade",))
+    case("a required yaml setting that is missing", "trustPolicy is not set",
+         settings=("js/pnpm-workspace.yaml:trustPolicy=no-downgrade",))
+    case("a required yaml setting with another value", "want no-downgrade",
+         {"js/pnpm-workspace.yaml": "minimumReleaseAge: 43200\nonlyBuiltDependencies: []\ntrustPolicy: off\n"},
+         settings=("js/pnpm-workspace.yaml:trustPolicy=no-downgrade",))
+    case("a required .npmrc setting that holds is green", None, {"js/.npmrc": "# exact\nsave-exact=true\n"},
+         settings=("js/.npmrc:save-exact=true",))
+    case("a required .npmrc file that is missing", "does not exist", settings=("js/.npmrc:save-exact=true",))
     case("an allowlisted violation is green", None, npm_with(left="^1.2.3"),
          allow="# reason is mandatory\njs/package.json|left|vendor publishes only ranges; replace by Q3\n")
     case("an allowlist entry that matches nothing is stale", "stale entry", None,
@@ -378,12 +555,16 @@ def main():
     ap.add_argument("--root", default=".")
     ap.add_argument("--allow", default="", help="allowlist file (path|name|reason), relative to --root")
     ap.add_argument("--cargo-lock", default="", help="Cargo.lock: allow a caret/bare floor equal to a locked version")
-    ap.add_argument("--pnpm-workspace", default="", help="pnpm-workspace.yaml to check for release age and install scripts")
+    ap.add_argument("--pnpm-workspace", action="append", default=[],
+                    help="pnpm-workspace.yaml to check for release age and install scripts (repeatable)")
     ap.add_argument("--min-release-age", type=int, default=43200, help="minutes (default 43200 = 30 days)")
     ap.add_argument("--pip-require-hashes", action="store_true", help="every requirement line carries --hash=sha256:...")
     ap.add_argument("--npm", action="append", default=[])
     ap.add_argument("--pip", action="append", default=[])
     ap.add_argument("--cargo", action="append", default=[])
+    ap.add_argument("--pyproject", action="append", default=[])
+    ap.add_argument("--require-setting", action="append", default=[], metavar="FILE:KEY=VALUE",
+                    help="a setting that must hold in FILE (yaml top level or key=value), repeatable")
     ap.add_argument("--self-test", action="store_true")
     a = ap.parse_args()
     if a.self_test:
@@ -391,10 +572,12 @@ def main():
     root = os.path.abspath(a.root)
     j = lambda p: os.path.join(root, p) if p else ""
     npm, pip, cargo = [j(p) for p in a.npm], [j(p) for p in a.pip], [j(p) for p in a.cargo]
-    if not (npm or pip or cargo):
-        npm, pip, cargo = discover(root)
-    problems, n_found, n_allowed, n_files = run(root, npm, pip, cargo, j(a.allow), j(a.cargo_lock), j(a.pnpm_workspace),
-                                                a.min_release_age, a.pip_require_hashes)
+    pyproject = [j(p) for p in a.pyproject]
+    if not (npm or pip or cargo or pyproject):
+        npm, pip, cargo, pyproject = discover(root)
+    problems, n_found, n_allowed, n_files = run(root, npm, pip, cargo, pyproject, j(a.allow), j(a.cargo_lock),
+                                                [j(p) for p in a.pnpm_workspace], a.min_release_age, a.pip_require_hashes,
+                                                a.require_setting)
     if problems:
         print("check-pins: FAIL", file=sys.stderr)
         for p in problems:

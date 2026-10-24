@@ -1,0 +1,14 @@
+name: gates
+on:
+  pull_request:
+  push:
+    branches: [main]
+# Read-only by default; a job that must write widens one scope itself.
+permissions:
+  contents: read
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@0123456789abcdef0123456789abcdef01234567
+      - run: sh scripts/run-gates.sh

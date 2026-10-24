@@ -11,7 +11,7 @@ Usage (run from the repository root; Python 3 standard library only):
                             [--inventory | --update-baseline [--allow-grow]] [FILE...]
     comment_scan.py refs    [--root DIR] [--baseline FILE] [--skip PREFIX]... [--tracker DIR] [--word WORD]
                             [--inventory | --update-baseline [--allow-grow]] [FILE...]
-    comment_scan.py --self-test
+    comment_scan.py --self-test [history | refs]
 
     --root DIR          the tree to scan (default: the current directory)
     --baseline FILE     the ratchet file (default: history-comments.tsv or comment-refs.tsv in the baselines
@@ -20,7 +20,8 @@ Usage (run from the repository root; Python 3 standard library only):
     --min-date DATE     history only: ISO dates before DATE are data, not history (default: every date counts)
     --tracker DIR       refs only: the tracker directory, one file per item, NNN-slug.md, finished ones in DIR/done/
                         (default docs/backlog)
-    --word WORD         refs only: the word that introduces a cited id, as in "backlog N" (default backlog)
+    --word WORD         refs only: the word that introduces a cited id, as in "backlog N" (default backlog). A bare
+                        "<word> N" is a citation only when it is unmistakable (see "Citations" below)
     --inventory         list every counted line (the worklist for a cleanup sweep); exit 0
     --update-baseline   rewrite the baseline from the current tree; refuses to let any count grow
                         unless --allow-grow is also given (say why in the commit message)
@@ -32,6 +33,16 @@ What is a comment is decided in ONE place, the SYNTAX table below, keyed by file
 adding a row. A comment marker inside a string literal is not a comment. Python docstrings count as comments.
 Known gaps (they only make the check more lenient): code that lives inside a string of another language, and
 multi-line quoted strings in shell.
+
+Citations. The tracker word is often an ordinary English word ("issue", "ticket", "item"), and "the second issue 5
+times larger" is not a citation. So `<word> N` counts as one when (a) it is written `<word> #N`, or (b) the comment
+block also names the tracker (the tracker directory's name, e.g. "backlog", or the word "tracker"), or (c) N has three
+or more digits and is at most 25 above the highest existing id (it looks like an id) and does not read as a quantity
+("<word> N of/times/per ..."). With the default word ("backlog") the word itself names the tracker, so every
+`backlog N` counts. A citation that is none of these is not checked: write it `<word> #N`.
+
+What the history check knows is a list of common shapes (dates, hashes, the PHRASES below). Green means "no common
+shape found", not "clean": a comment can retell history in words no pattern matches.
 
 Deliberate exceptions carry a marker WITH a reason on the line itself:
     history-ok: <reason>     the line is history on purpose (a quoted upstream changelog, a date the code needs)
@@ -210,6 +221,21 @@ PHRASES = [
     (re.compile(r"\b(?:after|following|since) (?:the|a|an) (?:incident|outage|regression|post-?mortem|bug report)\b",
                 re.I), "incident"),
     (re.compile(r"\bwe (?:found|discovered|noticed|hit|saw)\b", re.I), "incident"),
+    # Shapes that retell a fix, a removal or a rewrite. Each stays low in false positives: "was fixed" needs a
+    # following word that makes it a story (a width that "is fixed at 3 columns" is not one).
+    (re.compile(r"\b(?:was|were|got|has been|have been) (?:fixed|resolved|patched|addressed) (?:in|upstream|since|after|as of)\b",
+                re.I), "was fixed"),
+    (re.compile(r"\b(?:fixed|resolved|patched) (?:in|since|as of) (?:v|version |release )?\d+(?:\.\d+)+", re.I), "fixed in"),
+    (re.compile(r"\b(?:removed|dropped|deprecated) (?:in|since|as of|from) (?:v|version |release )?\d+(?:\.\d+)+", re.I),
+     "removed in"),
+    (re.compile(r"\bkept for (?:the )?old\b", re.I), "kept for old"),
+    (re.compile(r"\b(?:leftovers?|left over|remnants?|relics?|vestiges?) (?:from|of) (?:the |an? )?"
+                r"(?:old|previous|former|earlier|original|legacy|rewrite|migration|refactor|port)\b", re.I), "leftover from"),
+    (re.compile(r"\bwe (?:switched|moved|replaced|dropped|removed|rewrote|renamed|changed|migrated|ported)\b", re.I),
+     "we changed"),
+    (re.compile(r"\b(?:originally|initially) (?:was|were|used|written|designed|implemented|had|did)\b", re.I), "originally"),
+    (re.compile(r"\b(?:TODO|FIXME|HACK|XXX)\b[^\n]*\b(?:since the|after the (?:rewrite|migration|refactor|port|outage|incident))\b",
+                re.I), "narrative TODO"),
 ]
 USED_TO = re.compile(r"(?:\b(\w+)\s+)?\bused to\b", re.I)
 # "is used to X", "can be used to X": the instrument sense, not history.
@@ -301,7 +327,7 @@ def cmd_history(root, opts):
                 print(f"  {p}: {a} -> {b}", file=sys.stderr)
             return 1
         write_baseline(base_path, "# history baseline: comment lines that retell history, per file (shrink-only).\n"
-                       "# path<TAB>count. Regenerate with: comment_scan.py history --update-baseline\n",
+                       "# path<TAB>count. Regenerate with: sh scripts/check-history-comments.sh --update-baseline\n",
                        [f"{p}\t{counts[p]}" for p in sorted(counts)])
         print(f"history: baseline written ({len(counts)} files, {sum(counts.values())} lines)")
         return 0
@@ -320,11 +346,12 @@ def cmd_history(root, opts):
     if stale:
         rc = 1
         print("history: the count FELL (good) but the baseline still allows the old number, which would let history\n"
-              "creep back in. Lock the drop in: comment_scan.py history --update-baseline", file=sys.stderr)
+              "creep back in. Lock the drop in: sh scripts/check-history-comments.sh --update-baseline", file=sys.stderr)
         for p, was, now in stale:
             print(f"  {p}: baseline {was}, now {now}" + ("  (file gone or clean)" if now == 0 else ""), file=sys.stderr)
     if rc == 0:
-        print(f"history: OK ({sum(counts.values())} baselined history lines in {len(counts)} files, none new)")
+        print(f"history: OK ({sum(counts.values())} baselined history lines in {len(counts)} files, none new); "
+              "green means no common shape found, not that the comments are clean")
     return rc
 
 
@@ -352,34 +379,69 @@ def make_patterns(root, word):
     return path_rx, cite_rx
 
 
-def refs_in(blocks, ids, path_rx, cite_rx):
+NEAR = 25  # a bare number is "id-like" when it has 3+ digits and is at most this far above the highest id
+NOT_A_CITATION = re.compile(r"^\s*(?:of|times|per|percent|%|x\b)", re.I)
+
+
+def blocks_of(comment_lines):
+    """Group (line, body) comment lines into blocks: runs of consecutive lines."""
+    spans, cur, prev = [], [], None
+    for ln, body in comment_lines:
+        if cur and ln != prev + 1:
+            spans.append(cur)
+            cur = []
+        cur.append((ln, body))
+        prev = ln
+    if cur:
+        spans.append(cur)
+    return spans
+
+
+def is_citation(m, ids, names_tracker):
+    """Is a `<word> N` match a citation? `#N` and a block that names the tracker always; otherwise N must look like
+    an id and must not read as a quantity ("issue 5 times larger")."""
+    first = m.group(1)
+    if re.search(r"#\d", m.group(0)) or names_tracker:
+        return True
+    if NOT_A_CITATION.match(m.string[m.end():m.end() + 12]):
+        return False
+    return len(first) >= 3 and int(first) <= max(ids, default=0) + NEAR
+
+
+def refs_in(blocks, ids, path_rx, cite_rx, tracker_rx):
     """[(line, kind, ref)] cited in a comment and not resolved by the id set (paths are checked by the caller)."""
     bad = []
-    for ln, body in blocks:
-        if MARK_REF.search(body):
-            continue
-        for m in cite_rx.finditer(body):
-            nums = [m.group(1)] + re.findall(r"\d{1,6}", m.group(2) or "")
-            for x in nums:
-                if int(x) not in ids:
-                    bad.append((ln, "id", str(int(x))))
-        if path_rx:
-            for m in path_rx.finditer(body):
-                if m.end() >= len(body.rstrip()) and m.group(0).endswith("-"):
-                    continue  # hyphen-wrapped onto the next line: the rest of the name is not on this one
-                tok = m.group(0).rstrip(".-")
-                if not PLACEHOLDER.search(tok):
-                    bad.append((ln, "path", tok))
+    for span in blocks_of(blocks):
+        names_tracker = any(tracker_rx.search(b) for _, b in span)
+        for ln, body in span:
+            if MARK_REF.search(body):
+                continue
+            for m in cite_rx.finditer(body):
+                if not is_citation(m, ids, names_tracker):
+                    continue
+                nums = [m.group(1)] + re.findall(r"\d{1,6}", m.group(2) or "")
+                for x in nums:
+                    if int(x) not in ids:
+                        bad.append((ln, "id", str(int(x))))
+            if path_rx:
+                for m in path_rx.finditer(body):
+                    if m.end() >= len(body.rstrip()) and m.group(0).endswith("-"):
+                        continue  # hyphen-wrapped onto the next line: the rest of the name is not on this one
+                    tok = m.group(0).rstrip(".-")
+                    if not PLACEHOLDER.search(tok):
+                        bad.append((ln, "path", tok))
     return bad
 
 
 def scan_refs(root, files, tracker, word):
     ids = tracker_ids(os.path.join(root, tracker))
     path_rx, cite_rx = make_patterns(root, word)
+    names = {os.path.basename(tracker.rstrip("/")).lower(), "tracker"}
+    tracker_rx = re.compile(r"\b(?:%s)\b" % "|".join(map(re.escape, sorted(names))), re.I)
     out = {}
     for p in files:
         res = []
-        for ln, kind, ref in refs_in(comments_of(root, p), ids, path_rx, cite_rx):
+        for ln, kind, ref in refs_in(comments_of(root, p), ids, path_rx, cite_rx, tracker_rx):
             if kind == "path":
                 ref = re.sub(r":\d+(?:-\d+)?$", "", ref)
                 if os.path.exists(os.path.join(root, ref)) or os.path.exists(os.path.join(root, ref.rstrip("/"))):
@@ -414,7 +476,7 @@ def cmd_refs(root, opts):
                 print(f"  {k}", file=sys.stderr)
             return 1
         write_baseline(base_path, "# refs baseline: dead tracker-id and repository-path citations in comments (shrink-only).\n"
-                       "# file<TAB>kind<TAB>ref. Fix the citation, then: comment_scan.py refs --update-baseline\n", keys)
+                       "# file<TAB>kind<TAB>ref. Fix the citation, then: sh scripts/check-comment-refs.sh --update-baseline\n", keys)
         print(f"refs: baseline written ({len(keys)} dead references)")
         return 0
     rc = 0
@@ -434,7 +496,7 @@ def cmd_refs(root, opts):
     if stale:
         rc = 1
         print("refs: baseline entries that now resolve (or whose comment is gone); lock it in with\n"
-              "comment_scan.py refs --update-baseline:", file=sys.stderr)
+              "sh scripts/check-comment-refs.sh --update-baseline:", file=sys.stderr)
         for k in stale:
             print("  " + k.replace("\t", "  "), file=sys.stderr)
     if rc == 0:
@@ -471,7 +533,17 @@ def _run_cases(label, kind, cases):
     return fails
 
 
-def self_test():
+def self_test(kind=None):
+    fails = 0
+    if kind in (None, "history"):
+        fails += self_test_history()
+    if kind in (None, "refs"):
+        fails += self_test_refs()
+    print(f"comment_scan --self-test{' ' + kind if kind else ''}: {'OK' if not fails else str(fails) + ' FAILED'}")
+    return 1 if fails else 0
+
+
+def self_test_history():
     one = ["src/a.py\t1"]
     history = [
         # (name, files, baseline lines or None, expected rc)
@@ -499,6 +571,19 @@ def self_test():
         ("`<path> @ <sha>` is provenance", {"src/a.py": "# ported from lib/x.py @ 7e4034b2\n"}, [], 0),
         ("skipped prefix is ignored", {"docs/a.py": "# 2025-03-02 used to\n", "vendor/b.js": "// used to\n"}, [], 0),
         ("--min-date: old dates are data", {"src/a.py": "# fixture date 2019-05-05\n"}, [], 0, ["--min-date", "2024-01-01"]),
+        # shapes that retell a fix, a removal or a rewrite
+        ("css: a workaround that retells its fix", {"src/a.css": "/* Workaround for bug that was fixed in 1.4, kept for old browsers */\na { top: 0 }\n"}, [], 1),
+        ("ts: fixed in a version", {"src/a.ts": "// fixed in 2.3.1\nconst x = 1;\n"}, [], 1),
+        ("ts: removed in a version", {"src/a.ts": "// removed in v3.0 but still read for old files\n"}, [], 1),
+        ("python: was fixed upstream", {"src/a.py": "# the leak was fixed upstream\n"}, [], 1),
+        ("python: kept for old", {"src/a.py": "# kept for old callers\n"}, [], 1),
+        ("go: narrative TODO", {"src/a.go": "// TODO: tidy this up after the rewrite\nfunc a() {}\n"}, [], 1),
+        ("sh: leftover from the old parser", {"src/a.sh": "# leftover from the old parser\n"}, [], 1),
+        ("rust: we switched", {"src/a.rs": "// we switched to a map because lookups were slow\nfn a() {}\n"}, [], 1),
+        ("ts: originally", {"src/a.ts": "// originally written as a loop\n"}, [], 1),
+        ("a present-tense reason with `kept for backward compatibility` passes", {"src/a.py": "# kept for backward compatibility with v1 callers\n"}, [], 0),
+        ("a width that is fixed passes", {"src/a.css": "/* fixed at 3 columns; the width is fixed in the constructor */\na { top: 0 }\n"}, [], 0),
+        ("`removed items` and a deprecation window pass", {"src/a.py": "# removed items are listed in the footer; deprecated flags warn\n"}, [], 0),
     ]
     fails = _run_cases("history", "history", history)
     # the ratchet commands themselves
@@ -515,6 +600,11 @@ def self_test():
     fails += not ok
     print(f"  {'ok  ' if ok else 'FAIL'} --update-baseline locks a drop in (rc {rc}, want 0)")
 
+    return fails
+
+
+def self_test_refs():
+    fails = 0
     tracker = {"docs/backlog/012-cache.md": "x", "docs/backlog/done/007-old.md": "y", "scripts/real.sh": "# hi\n"}
     refs = [
         ("existing ids and path pass", {**tracker, "src/a.py": "# backlog 12 and backlog 7, 12; see scripts/real.sh:3\n"}, [], 0),
@@ -531,12 +621,19 @@ def self_test():
         ("path in a string is not a comment", {**tracker, "src/a.py": "P = 'docs/gone/x.md'\n"}, [], 0),
         ("baselined dead path passes", {**tracker, "src/a.py": "# see docs/old.md\n"}, ["src/a.py\tpath\tdocs/old.md"], 0),
         ("stale baseline fails", {**tracker, "src/a.py": "# see scripts/real.sh\n"}, ["src/a.py\tpath\tdocs/old.md"], 1),
-        ("--word: a project's own word", {**tracker, "src/a.py": "# ticket 99\n"}, [], 1, ["--word", "ticket"]),
+        ("--word: a project's own word, written #N", {**tracker, "src/a.py": "# ticket #99\n"}, [], 1, ["--word", "ticket"]),
+        ("--word issue: prose is not a citation", {**tracker, "src/a.py": "# the second issue 5 times larger; see issue 3\n"}, [], 0, ["--word", "issue"]),
+        ("--word issue: a quantity near the highest id is not a citation", {**tracker, "src/a.py": "# issue 30 of them\n"}, [], 0, ["--word", "issue"]),
+        ("--word issue: #N is explicit", {**tracker, "src/a.py": "# see issue #3 for the numbers\n"}, [], 1, ["--word", "issue"]),
+        ("--word issue: the block names the tracker", {**tracker, "src/a.py": "# the backlog tracks it:\n# see issue 3\n"}, [], 1, ["--word", "issue"]),
+        ("--word issue: the tracker named in another block does not count", {**tracker, "src/a.py": "# the backlog\nx = 1\n# see issue 3\n"}, [], 0, ["--word", "issue"]),
+        ("--word issue: a three-digit id just above the highest is checked", {**tracker, "docs/backlog/100-big.md": "z", "src/a.py": "# fixed by issue 112\n"}, [], 1, ["--word", "issue"]),
+        ("--word issue: a three-digit number far above is data", {**tracker, "docs/backlog/100-big.md": "z", "src/a.py": "# a ceiling of issue 450 or so\n"}, [], 0, ["--word", "issue"]),
+        ("--word issue: a real id passes", {**tracker, "src/a.py": "# issue #12 and issue #7\n"}, [], 0, ["--word", "issue"]),
         ("missing tracker directory is bad usage", {"src/a.py": "# backlog 1\n"}, [], 2),
     ]
     fails += _run_cases("refs", "refs", refs)
-    print(f"comment_scan --self-test: {'OK' if not fails else str(fails) + ' FAILED'}")
-    return 1 if fails else 0
+    return fails
 
 
 # --------------------------------------------------------------------------- main
@@ -547,7 +644,10 @@ def usage(msg):
 
 def main(argv):
     if "--self-test" in argv[1:]:
-        return self_test()
+        rest = [a for a in argv[1:] if a != "--self-test"]
+        if rest not in ([], ["history"], ["refs"]):
+            usage("usage: comment_scan.py --self-test [history | refs]")
+        return self_test(rest[0] if rest else None)
     if len(argv) < 2 or argv[1] not in ("history", "refs"):
         usage("usage: comment_scan.py <history|refs> [--root DIR] [--baseline FILE] [--skip PREFIX] [--inventory|"
               "--update-baseline [--allow-grow]] [FILE...]   |   comment_scan.py --self-test")

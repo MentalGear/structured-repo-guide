@@ -9,9 +9,9 @@ Short on purpose: each rule has one home, linked here. A rule that belongs in a 
 
 ## Rules for every change
 
-- Run every check before every commit: `sh scripts/run-checks.sh`. Green is `ALL GREEN` and exit 0.
-- What each check enforces is [`docs/checks.md`](./docs/checks.md), generated from the script headers. A new check
-  needs its own header and nothing else.
+- Run every check before every commit: `sh scripts/run-gates.sh`. Green is `ALL GREEN` and exit 0.
+- What each check enforces is [`docs/checks.md`](./docs/checks.md), generated from the gate list and the script
+  headers. A new check is its own header plus one line in `scripts/gates.list`, and nothing else.
 - Comments describe the current state. History goes to the tracker item and is linked by id, as in "backlog 3".
 - Open and closed work is in [`docs/backlog.md`](./docs/backlog.md) and [`docs/backlog-done.md`](./docs/backlog-done.md);
   the owner's standing decisions are in [`docs/decisions.md`](./docs/decisions.md).

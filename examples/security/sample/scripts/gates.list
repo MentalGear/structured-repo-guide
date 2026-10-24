@@ -1,0 +1,8 @@
+# The gate list read by the shared runner (examples/gate-runner/run-gates.sh, documented in documentation/gate-runner.md):
+# one line per gate, `name|command`, run in this order. Every check script of the tree must be listed here.
+# group: Supply chain
+check-pins|sh scripts/check-pins.sh
+check-artifacts|sh scripts/check-artifacts.sh
+check-remote-assets|sh scripts/check-remote-assets.sh
+check-controls-table|sh scripts/check-controls-table.sh
+check-workflow-permissions|sh scripts/check-workflow-permissions.sh
