@@ -1,0 +1,2 @@
+# Illustrative stand-in for a committed lockfile; a real one is written by `pnpm install`.
+lockfileVersion: '9.0'

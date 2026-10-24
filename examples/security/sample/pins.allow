@@ -1,0 +1,2 @@
+# A reason is required. An entry that matches no violation fails the run.
+py/requirements.txt|legacy-tool|upstream publishes only wide ranges; replace or drop it (tracked by the security owner)

@@ -1,0 +1,13 @@
+[package]
+name = "sample-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { version = "=1.0.200", default-features = false, features = ["derive"] }
+markdown-parser = { version = "=0.13.4", default-features = false }
+shared = { path = "../shared" }
+internal-lib = { git = "https://example.invalid/internal-lib", rev = "0123456789abcdef0123456789abcdef01234567" }
+
+[dev-dependencies]
+tempfile = "=3.8.0"

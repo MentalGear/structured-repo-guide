@@ -1,0 +1,5 @@
+# Refuse any version published less than 30 days (43200 minutes) ago.
+# A deliberate exception is one package at a time with minimumReleaseAgeExclude, with a reason comment.
+minimumReleaseAge: 43200
+# No dependency may run an install script. Keep this list EMPTY.
+onlyBuiltDependencies: []

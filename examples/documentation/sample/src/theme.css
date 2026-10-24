@@ -1,0 +1,3 @@
+/* The ring is drawn as a box-shadow, so it follows the element's radius; outline is reset
+   so the browser does not draw a second ring beside it (backlog 3). */
+.control:focus-visible { outline: none; box-shadow: 0 0 0 2px currentColor; }
