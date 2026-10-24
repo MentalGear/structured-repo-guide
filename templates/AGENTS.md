@@ -28,7 +28,8 @@ check never needs an edit to this file.
 - **Code describes only its current state.** A comment, test name or user-visible string gives a reason, in present
   tense, plus the item id. History (dates, commit hashes, "used to", incident stories, which agent or round found it)
   is written straight into the item, or the archive for a long note, and is linked, never retold in the code. Rule and examples:
-  [`docs/guides/history-in-comments.md`](./docs/guides/history-in-comments.md).
+  [`docs/guides/history-in-comments.md`](./docs/guides/history-in-comments.md). A helper reads its brief, not this file:
+  copy this rule into every brief you hand out.
 - **When the same problem shows up twice, stop patching instances.** Find the root cause and fix the class by
   construction: a check that makes it unable to recur. Existing debt goes in a shrink-only baseline.
 - **One home per rule.** When you are about to paste a rule into a second file, link it instead.

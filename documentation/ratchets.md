@@ -146,11 +146,14 @@ trusted to go red".
 - **Shrink** it as you clean: after a sweep, run `--update-baseline` and commit the lower numbers with the sweep.
 - **Grow** it only with `--allow-grow`, and say why in the commit message. Prefer fixing the line or marking it with a
   reason.
+- **Grow once on purpose when the checker learns a new form.** A stricter pattern raises counts on code that was green; take
+  the rise with `--allow-grow` and the reason in the commit, nothing else in it, then let the sweep shrink it. A silent
+  rise hides a real regression behind it.
 - **Sort and one entry per line.** Merges then conflict rarely, and a conflict is easy to resolve: take the lower
   count, then run the check.
 - **Review the baseline diff.** A diff that raises a number is a decision. A diff that deletes lines is progress.
 - **Aim at empty.** When a baseline is empty, delete the file and make the check absolute. The ratchet has finished its
-  job.
+  job. A check over something cheap to fix, such as names, starts absolute, with reasoned allow entries and no baseline.
 
 ## When not to use a ratchet
 

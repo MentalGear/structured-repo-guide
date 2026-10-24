@@ -192,8 +192,13 @@ you edit a script header without regenerating.
 
 Do this last among the large steps, because the moves above fix many dead citations for free.
 
+0. **Stop the inflow first.** Put the standing order in the entry file and in the brief of every helper of this step (and of
+   every later one): "Code describes only its current state. The story goes straight into the tracker item's status or
+   detail, or the archive, linked by id." A sweep without it races the writers it is cleaning up after
+   ([prevention](./history-in-comments.md#prevention-say-the-order-where-the-writer-reads-it)).
 1. Get the worklist: `sh scripts/check-history-comments.sh --inventory > sweep.txt`. Each line is `file:line  reason  text`.
-2. Work file by file, or hand a closed list of files to each helper. For each line apply
+2. Work file by file, or hand a closed list of files to each helper (one work stream per set of directories, see
+   [delegating](#ground-rules-for-delegating)). For each line apply
    [archive, link, fold](./history-in-comments.md#the-three-moves):
    - the story goes to the item (create it if needed),
    - the comment cites the item by id,
@@ -203,16 +208,32 @@ Do this last among the large steps, because the moves above fix many dead citati
 4. Fix dead citations as you meet them: `sh scripts/check-comment-refs.sh --inventory` lists them. The old path becomes the new path,
    or the id of the item that now holds the story.
 5. Mark the lines that are right as written (`history-ok: <reason>`), and nothing else.
+6. **Route stale facts, do not fix them silently.** A sweep reads every comment and finds claims that are wrong now: a count
+   that no longer matches, a reference to a file that is gone, a setting that was retired. The sweep owns comments, not
+   those facts. Add a reference check (`check-comment-refs.sh` covers paths and ids) or a tracker item for each, and keep
+   the rewritten comment true by pointing at the item.
+7. **When the scanner learns a form, grow the baseline once on purpose** (`--update-baseline --allow-grow`, the reason in
+   the commit), then shrink it again with the sweep ([teaching the scanner](./history-in-comments.md#teaching-the-scanner-a-new-shape)).
+8. **After the scanner reads zero, schedule cold reads.** A scanner cannot certify zero: a reviewer reads every comment of a
+   sample by meaning ([cold reads](./history-in-comments.md#cold-reads-a-scanner-cannot-certify-zero)). Each finding that fits
+   a pattern becomes a scanner rule with a self-test case. Stop when a cold read of a fresh sample finds about none.
+9. **Cover the text that is not a comment:** comments in embedded strings and HTML, and names (test titles, test function
+   names, test file names), the last under a zero-tolerance gate with no baseline
+   ([text that is not a comment](./history-in-comments.md#text-that-is-not-a-comment)).
 
 **Verify, every batch:**
 
 - The behaviour of the code is unchanged. The sweep touches comments only. Run the build and tests. For a stronger check,
   compare the code with comments stripped, before and after, and require equality
   (for a language with a formatter, format first).
+- **The tree still parses.** A comment edit can break the build without touching code: a stray `*/` left a test file
+  unparseable, and the test runner silently loaded zero files and reported green. Every comment-only batch runs a parse
+  check before it hands back: compile, lint, or the test runner's list mode with an expected file count.
 - The history check shows the lower count, and nothing rose.
 - A sample of 10 changed comments, read as a stranger: does each state a reason or nothing?
 
-Delegating this step is safe. The edits are mechanical, the file lists are closed and the checks verify the result.
+Delegating this step is safe. The edits are mechanical, the file lists are closed and the checks verify the result. The
+cold reads (item 8) are the exception: they are judgment, and they go to a reader who did not rewrite that sample.
 
 ## Step 8: split the tracker
 
@@ -268,3 +289,8 @@ stream owns and may not touch.
   runner once at the end of a batch, not in every stream (a helper runs `--fast`; see
   [`gate-runner.md`](./gate-runner.md#making-the-full-run-affordable)).
 - **Capture the baseline before dispatching.** It cannot be recovered afterwards.
+- **Delegate a comment sweep by disjoint comment trees:** one stream per set of directories, so no two edit the same file.
+- **Keep exactly one owner for the scanner and its baseline.** Streams read the inventory and fix lines. Only the owner changes
+  a pattern or runs `--update-baseline`, once per batch on the merged tree, so streams never fight over the baseline file.
+- **Every brief carries the standing order** about history, verbatim, and every comment-only stream ends with a parse check
+  ([Step 7](#step-7-sweep-the-comments)). A brief that omits either gets a stream that adds the debt it is asked to remove.

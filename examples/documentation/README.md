@@ -10,7 +10,7 @@ virtualenv or build tree is never read), and elsewhere they walk the tree. The r
 
 | File | What it does | Guide |
 |---|---|---|
-| `comment_scan.py` | One comment extractor behind two checks: `history` (a per-file ratchet on comment lines that retell history) and `refs` (every cited tracker id and repository path resolves). The comment syntax is found by file extension, then by file name (`Makefile`, `Dockerfile`), then by the `#!` line of an extensionless script; add a row to its `SYNTAX`, `FILENAMES` or `SHEBANGS` table for another language. | [history in comments](../../documentation/history-in-comments.md), [ratchets](../../documentation/ratchets.md) |
+| `comment_scan.py` | One comment extractor behind two checks: `history` (a per-file ratchet on comment lines that retell history) and `refs` (every cited tracker id and repository path resolves). The comment syntax is found by file extension, then by file name (`Makefile`, `Dockerfile`), then by the `#!` line of an extensionless script; add a row to its `SYNTAX`, `FILENAMES` or `SHEBANGS` table for another language. It reads comments only: not the comments inside string literals or the `<script>`/`<style>` bodies of HTML, and not names (test titles, test function and file names), which want their own zero-tolerance gate ([text that is not a comment](../../documentation/history-in-comments.md#text-that-is-not-a-comment)). | [history in comments](../../documentation/history-in-comments.md), [ratchets](../../documentation/ratchets.md) |
 | `check-history-comments.sh` | Wrapper: `comment_scan.py history`. | |
 | `check-comment-refs.sh` | Wrapper: `comment_scan.py refs`. | |
 | `check_doc_links.py`, `check-doc-links.sh` | Every relative Markdown link, and every `#anchor`, resolves. | [layout](../../documentation/layout.md#keeping-cited-paths-and-headings-stable) |
@@ -140,7 +140,7 @@ The eight `check-*.sh` wrappers are listed in `gates.list`; keep them there. The
 |---|---|
 | The languages whose comments are scanned, and their comment syntax | the `SYNTAX` table in `comment_scan.py` (one row per extension) |
 | Paths that are never scanned | `SKIP_PREFIXES`, `SKIP_DIRNAMES`, `SKIP_SUFFIXES` in `comment_scan.py`, or `--skip PREFIX` |
-| The phrases that count as history | `PHRASES` in `comment_scan.py`; add the sentence that motivated it to `self_test_history()` |
+| The phrases that count as history | `PHRASES` in `comment_scan.py` (work-stream words, evidence narration, contrasts without "before"; scratch paths are `SCRATCH`, and paths are masked by `PATH_TOKEN`); add the sentence that motivated it to `self_test_history()` ([teaching the scanner](../../documentation/history-in-comments.md#teaching-the-scanner-a-new-shape)) |
 | Pinned upstream revisions that are provenance, not history | `PINNED_REVS` in `comment_scan.py` |
 | Dates that are test data, not history | `--min-date YYYY-MM-DD` |
 | The word that introduces a cited id (`backlog`, `issue`, `ticket`); a bare `issue 12` counts only when unmistakable, so write `issue #12` | `--word WORD` ([citations](../../documentation/history-in-comments.md#citing-an-item-what-counts-as-a-citation)) |

@@ -45,7 +45,7 @@ runner, and keep every rule in the repository.
 |---|---|
 | [`principles.md`](./principles.md) | The nine rules everything else applies. Start here. |
 | [`layout.md`](./layout.md) | The target docs tree, what goes in each directory, how to keep cited paths and headings stable. |
-| [`history-in-comments.md`](./history-in-comments.md) | The archive / link / fold rule for comments, with before and after in six languages, what counts as history, markers for exceptions. |
+| [`history-in-comments.md`](./history-in-comments.md) | The archive / link / fold rule for comments, with before and after in six languages, what counts as history, markers for exceptions, prevention in the entry file and in every brief, teaching the scanner new shapes, text that is not a comment, and cold reads. |
 | [`tracker-as-files.md`](./tracker-as-files.md) | The backlog as one file per item, with front matter, ids that comments cite, and generated open and done indexes. |
 | [`generated-docs.md`](./generated-docs.md) | Generating a checks catalogue from the gate list and the script headers, with a freshness check. The same shape for any generated page. |
 | [`ratchets.md`](./ratchets.md) | Shrink-only baselines: how a strict check lands in a codebase that already violates it, and how a check proves it can fail. |

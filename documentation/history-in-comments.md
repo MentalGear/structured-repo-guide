@@ -22,10 +22,14 @@ Why this matters:
 - [What counts as history](#what-counts-as-history)
 - [What is allowed](#what-is-allowed)
 - [Markers for deliberate exceptions](#markers-for-deliberate-exceptions)
+- [Prevention: say the order where the writer reads it](#prevention-say-the-order-where-the-writer-reads-it)
 - [How the check works](#how-the-check-works)
 - [Citing an item: what counts as a citation](#citing-an-item-what-counts-as-a-citation)
+- [Teaching the scanner a new shape](#teaching-the-scanner-a-new-shape)
+- [Text that is not a comment](#text-that-is-not-a-comment)
 - [Day to day](#day-to-day)
 - [Limits of a line check](#limits-of-a-line-check)
+- [Cold reads: a scanner cannot certify zero](#cold-reads-a-scanner-cannot-certify-zero)
 - [The page for your repository](#the-page-for-your-repository)
 
 ## The three moves
@@ -153,6 +157,10 @@ A comment line is history when it tells how the code changed instead of what it 
 | Leftovers | `leftover from the old parser`, `remnant of the migration` | Defines the code by what surrounds it no more. |
 | "We" did something | `we switched to a map`, `we moved it`, `originally written as a loop` | A story told by its author. |
 | A narrative TODO | `TODO: tidy this up after the rewrite` | A TODO tied to an event instead of an item. Write `TODO(backlog 12)`. |
+| Who found it | `lane 4`, `round 2`, `an earlier session`, `the agent found a race` | Names the work stream that did the change. The item names it, and the stream is gone. |
+| Evidence narration | `confirmed live`, `measured before the fix`, `the report showed` | How somebody came to know. The comment states the fact, the item holds the evidence. |
+| A contrast without "before" | `as before`, `always was`, `unchanged from`, `it replaces the old index` | Defines the code against a state the reader never saw. |
+| A scratch path | `/tmp/sweep.txt`, `scratch/notes` | A file of whoever did the work, gone with their session. |
 
 Not history, and not flagged:
 
@@ -163,6 +171,9 @@ Not history, and not flagged:
   from the payload by the server`. The same verb about the code (`this was renamed`) is history. So is a condition
   (`freed once it is no longer referenced`), where `no longer` states what must hold and tells no story.
 - A colour or a hex literal that looks like a hash: `#abc1234`, `0xdeadbeef`.
+- A word inside a file path: `docs/old-name.md`, `archive/2025-03-02-notes.md`. The scanner masks a path before it matches
+  (two slashes or more, or one slash and an extension), so a citation of a file never counts as the file's story. A slash
+  date (`02/03/2025`) and `and/or` are not paths.
 - A pinned upstream revision that a file was ported from, in the form `ported from lib/x.py @ 7e4034b`. That is
   provenance (where the code came from), and it is current: the file is that port.
 
@@ -204,6 +215,20 @@ A marker goes on the line itself, with a reason a reviewer can judge:
   line of the diff.
 - A pattern that fires on an innocent sentence is a bug in the scanner. Tighten the pattern and add the sentence to
   the scanner's self-test. Do not mark it.
+
+## Prevention: say the order where the writer reads it
+
+A sweep removes what is there. It does not stop the next writer, and most history in comments is written by a helper (a
+person or an agent) who was never told the rule. One sentence in two places is cheaper than any sweep:
+
+- **The entry file**, which every session reads first ([`../templates/AGENTS.md`](../templates/AGENTS.md) carries it).
+- **The brief of every delegated work stream.** A helper reads its brief, not the entry file, and a brief written for a code
+  change says nothing about comments. Paste the order in verbatim: "Code describes only its current state. The story of a
+  change goes straight into the tracker item's status or detail, or the archive, linked by id. It is never retold in a
+  comment, a test name or a string."
+
+The order names where the story goes. "Do not write history" leaves a writer holding a fact with no place to put it. The item
+is the place, so the writer has a better move than skipping the fact.
 
 ## How the check works
 
@@ -250,6 +275,57 @@ With the default word, `backlog`, the word itself names the tracker, so every `b
 is `issue` writes `issue #12` in comments and gets exactly the citations it meant checked. A second tracker (defect records,
 below) is a second run of the same check with `--tracker docs/issues --word issue --baseline scripts/baselines/issue-refs.tsv`.
 
+## Teaching the scanner a new shape
+
+The first scanner is always too lenient, and every cold read ([below](#cold-reads-a-scanner-cannot-certify-zero)) finds a
+shape it does not know. Each finding that fits a pattern becomes a scanner rule plus a self-test case that plants it, so
+the next read finds less. Shapes that a first scanner usually misses:
+
+- Dates with a month name: `March 2025`, `since March`, `on the 3rd of March`.
+- Work-stream words: `lane 4`, `round 2`, `an earlier session`, `the agent found`.
+- Evidence narration: `confirmed live`, `measured before the fix`, `the report showed`.
+- Scratch-file paths: `/tmp/sweep.txt`, `scratch/notes`.
+- A before and after contrast with no "before" in it: `as before`, `always was`, `unchanged`, `it replaces`. In a test name,
+  `still` is the same contrast: `still renders the header`.
+
+Each new pattern needs the false-positive rules that keep the gate trusted, or people start marking lines to get past it:
+
+- **Mask file paths before matching.** A citation of `docs/old-name.md` is not a story.
+- **Exempt pinned upstream revisions.** `ported from lib/x.py @ 7e4034b` is provenance.
+- **Allow the condition.** `if the lock is no longer held` states what must hold. `no longer` fires only when no
+  conditional word opens the clause.
+- **Allow the instrument.** `used to measure`, `is used to size` name what a thing is for.
+
+When the scanner learns a form, its count rises on code that was green a moment ago. Grow the baseline once, on purpose:
+`--update-baseline --allow-grow`, the reason in the commit message ("scanner now reads month names: 553 -> 838 lines"),
+nothing else in that commit. Then the count shrinks again as the sweep runs. A baseline that grows without that flag and
+that sentence is a baseline nobody is reading.
+
+[`comment_scan.py`](../examples/documentation/comment_scan.py) carries the work-stream, evidence, contrast and scratch-path
+patterns and the path masking above, each with self-test cases. Its month-name dates, `used to` and `no longer` rules
+include the instrument and condition exceptions.
+
+## Text that is not a comment
+
+History sits wherever text sits in code. A scanner that reads comments reads none of these, so list them and decide for each:
+
+- **Comments inside other languages embedded in a string literal:** a script a page loads, a stylesheet a program writes, a
+  query. The extractor sees one string.
+- **HTML files and templates,** including the bodies of `<script>` and `<style>`, which have their own comment syntax.
+- **Names:** end-to-end test titles, unit test function names, test file names. `test("still renders the header")`,
+  `fn handles_the_old_format()`, `login_regression_fix.spec`. A name shows in every failure report and is read more often than
+  the comments around it.
+
+**Names get a zero-tolerance gate.** No baseline: a rename is cheap, the debt would only be kept, and a name has no marker
+syntax. An allow entry is a path and a reason, reviewed like a marker. A name states what is checked, in present tense:
+`renders the header`, not `still renders the header after the fix`.
+
+**What the sample does.** [`comment_scan.py`](../examples/documentation/comment_scan.py) reads the comments of the
+languages in its table, and of an HTML file only its `<!-- -->` comments. It does not look inside string literals, does not read
+`<script>` or `<style>` bodies as JavaScript or CSS, and does not scan names. To cover them, write one extractor per kind of
+text in your language's own parser (or a regex over test-framework calls) and pass each extracted line to the same pattern
+table (`history_reason`), so there is one list of shapes and one self-test.
+
 ## Day to day
 
 - The check went red on your change. It prints the file and each hit line with its reason (`[date]`, `[used to]`).
@@ -258,7 +334,7 @@ below) is a second run of the same check with `--tracker docs/issues --word issu
 - To see all the debt: `check-history-comments.sh --inventory` prints `file:line  reason  text` for every counted line.
   That is the worklist for a sweep. See [`cleanup-playbook.md`](./cleanup-playbook.md).
 - A baseline that must grow needs `sh scripts/check-history-comments.sh --update-baseline --allow-grow`, and the commit message says why. Prefer a marker
-  with a reason.
+  with a reason. The legitimate case is a scanner that learned a new form ([above](#teaching-the-scanner-a-new-shape)).
 - In review, ask of every new comment: "Does this still read true after the next change?" If it narrates, it will not.
 
 ## Limits of a line check
@@ -268,7 +344,7 @@ below) is a second run of the same check with `--tracker docs/issues --word issu
   list of phrases (the table above). A comment can retell history in words no pattern matches. The patterns catch the common
   shapes; add one when review finds a new shape twice, with its sentence in the scanner's self-test. A reviewer still reads
   the comments in a diff, and a sweep still reads the files it touches: the check keeps what was found from coming back, and
-  finds nothing that its patterns do not describe.
+  finds nothing that its patterns do not describe. Reading what the scanner cannot is [a scheduled step](#cold-reads-a-scanner-cannot-certify-zero).
 - Some patterns trade a few false positives for coverage, and "old" in `kept for old callers` is one of them: "old" ages, so
   the rewrite names the thing ("callers older than v3") and the marker is for the rare line that must stay as it is.
 - The extractor is a lexer, not a parser. Its gaps cut both ways: a comment can be missed (code inside a string of another
@@ -283,6 +359,27 @@ below) is a second run of the same check with `--tracker docs/issues --word issu
 - Prose docs are not scanned for narration. Their rule is in [`principles.md`](./principles.md): living docs state the
   current state, and history goes to the archive. One shape is checked by its own ratchet: a dated heading or lead-in
   (`## Status (2025-03-02)`) in a living doc (`check-dated-headings.sh`).
+
+## Cold reads: a scanner cannot certify zero
+
+A scanner at zero says "no shape I know". After it reads zero, schedule cold reads: a reviewer who did not do the sweep reads
+every comment of a sample by meaning, not by pattern, and lists what retells.
+
+A worked example, a repository of about 200,000 lines: the scanner count went 553, then 838 (the scanner made stricter), then
+46, then 85 (stricter again), then 0. The first cold read of the "clean" tree still found about 21 retelling comments per 1,000
+comment lines. A second full read found 6 to 29 per 1,000 in each area of the code, and about 77 per 1,000 in end-to-end test
+files, where narration of the bug that prompted the test is the habit.
+
+The loop:
+
+1. Pick a sample, by directory, and read all of its comments. Do not read only the ones near a match.
+2. Fix each finding by the [three moves](#the-three-moves).
+3. Every finding that fits a pattern becomes a scanner rule plus a self-test case ([above](#teaching-the-scanner-a-new-shape)).
+   A finding that fits none is fixed and left.
+4. Read a fresh sample. Stop when a cold read of a sample nobody has read finds about none. The rate per 1,000 comment lines
+   is the number to watch, because it does not depend on how large the sample is.
+
+The reads are for people or agents with fresh context: a reader who wrote the rewrite reads what the rewrite meant.
 
 ## The page for your repository
 

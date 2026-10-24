@@ -41,6 +41,9 @@ another language (the comments of a Python file that a heredoc writes are not se
 JavaScript template literal, a JavaScript `/` after `)` or `}` (read as division even where it opens a regex),
 nested quotes inside shell `$(...)`, and a file without a section model (a Vue or Svelte file is one stream of `<!-- -->`,
 `//` and `/* */` comments, so a `//` in template text reads as a comment).
+Not read at all: comments inside JavaScript, CSS, SQL or HTML that sits in a string literal, the `<script>` and `<style>`
+bodies of an HTML file (only its `<!-- -->` comments are read), and names such as test titles, test function names and test
+file names. Those want an extractor of their own that feeds `history_reason`, and a gate with no baseline for the names.
 
 Citations. The tracker word is often an ordinary English word ("issue", "ticket", "item"), and "the second issue 5
 times larger" is not a citation. So `<word> N` counts as one when (a) it is written `<word> #N`, or (b) the comment
@@ -410,7 +413,37 @@ PHRASES = [
     (re.compile(r"\b(?:originally|initially) (?:was|were|used|written|designed|implemented|had|did)\b", re.I), "originally"),
     (re.compile(r"\b(?:TODO|FIXME|HACK|XXX)\b[^\n]*\b(?:since the|after the (?:rewrite|migration|refactor|port|outage|incident))\b",
                 re.I), "narrative TODO"),
+    # Who or which work stream found it. "session" and "round" alone are ordinary words of code (a user session, to
+    # round a number), so only the numbered and the "earlier/previous" forms count.
+    (re.compile(r"\b(?:lane|sprint|round) \d+\b", re.I), "work stream"),
+    (re.compile(r"\b(?:an?|the|another) (?:earlier|previous|prior|last) (?:lane|session|round|sprint|agent)\b", re.I),
+     "work stream"),
+    (re.compile(r"\b(?:the|an?|another) (?:agent|lane) (?:found|noticed|reported|flagged|added|wrote|changed|hit|saw|left)\b",
+                re.I), "work stream"),
+    # Evidence narration: how somebody came to know, which stays true of the code for no longer than the next change.
+    (re.compile(r"\b(?:confirmed|verified|reproduced|observed|measured) (?:live|in production|on a device|on hardware|"
+                r"manually|by hand)\b", re.I), "evidence"),
+    (re.compile(r"\bmeasured (?:before|after)\b", re.I), "evidence"),
+    (re.compile(r"\bthe (?:report|review|audit|trace|profile) (?:showed|found|said|revealed|flagged)\b", re.I), "evidence"),
+    # A contrast with the state before, without the word "before".
+    (re.compile(r"\b(?:as before|always was|same as (?:before|earlier)|unchanged (?:from|since|after))\b", re.I),
+     "contrast"),
+    (re.compile(r"\bit replaces the (?:old|previous|former|earlier)\b", re.I), "contrast"),
 ]
+# A scratch file of whoever does the work: a temp path, a home path or a scratch directory. It is gone with the session.
+SCRATCH = re.compile(r"(?:^|[\s(`'\"])(?:/tmp/|/var/tmp/|~/)\S|\bscratch(?:pad)?/\S", re.I)
+# A path names a file, so the words inside it are not prose (a file name that spells a phrase holds no prose). A token counts as
+# a path with two slashes or more, or with one slash and a file extension; a slash date and "and/or" stay as they are.
+PATH_TOKEN = re.compile(r"(?<![\w/.-])(?:\.{1,2}/)?[A-Za-z_][\w.@-]*(?:/[\w.@-]+)+")
+
+
+def _mask_paths(body):
+    def hide(m):
+        t = m.group(0)
+        return "_path_" if t.count("/") >= 2 or re.search(r"\.\w{1,5}$", t) else t
+    return PATH_TOKEN.sub(hide, body)
+
+
 USED_TO = re.compile(r"(?:\b(\w+)\s+)?\bused to\b", re.I)
 # "is used to X", "can be used to X": the instrument sense, not history.
 PASSIVE_PREV = {"is", "are", "be", "been", "being", "was", "were", "get", "gets", "got", "it's", "also", "only",
@@ -480,6 +513,9 @@ def history_reason(body, min_date="0000-01-01"):
     """Why a comment line retells history, or None. One reason per line is enough: the unit is the line."""
     if MARK_HISTORY.search(body):
         return None
+    if SCRATCH.search(body):
+        return "scratch path"
+    body = _mask_paths(body)
     for m in DATE.finditer(body):
         if "-".join(m.groups()) >= min_date:
             return "date"
@@ -895,6 +931,23 @@ def self_test_history():
         ("php: `//`, `#` and block comments are comments", {"src/a.php": "<?php\n// used to\n"}, [], 1),
         ("php: `#[Attribute]` is not a comment", {"src/a.php": "<?php\n#[Route('/x')] // clean\n"}, [], 0),
         ("vue: an HTML comment is a comment", {"src/A.vue": "<template><!-- used to be a list --></template>\n"}, [], 1),
+        # lessons of a large sweep: the shapes the first scanner missed, and the false positives that kept it trusted
+        ("work stream: a numbered lane", {"src/a.py": "# found in lane 4\nx = 1\n"}, [], 1),
+        ("work stream: an earlier session", {"src/a.py": "# an earlier session added this guard\n"}, [], 1),
+        ("work stream: an agent found it", {"src/a.py": "# the agent found a race here\n"}, [], 1),
+        ("a user session and rounding are not history", {"src/a.py": "# the user session expires; round the total up\n"}, [], 0),
+        ("evidence: confirmed live", {"src/a.ts": "// confirmed live on the staging cluster\n"}, [], 1),
+        ("evidence: measured before", {"src/a.ts": "// 40 ms, measured before the cache\n"}, [], 1),
+        ("evidence: the report showed", {"src/a.ts": "// the profile showed a long task\n"}, [], 1),
+        ("a measurement stated as a fact is not history", {"src/a.ts": "// takes 40 ms on the reference machine\n"}, [], 0),
+        ("contrast: as before", {"src/a.go": "// returns the same slice as before\nfunc a() {}\n"}, [], 1),
+        ("contrast: it replaces the old", {"src/a.go": "// it replaces the old index\nfunc a() {}\n"}, [], 1),
+        ("scratch path: /tmp file", {"src/a.sh": "# worklist in /tmp/sweep.txt\n"}, [], 1),
+        ("scratch path: a scratch directory", {"src/a.py": "# see scratch/notes for the run\n"}, [], 1),
+        ("a path is masked: no old name inside a file name", {"src/a.py": "# see docs/old-name.md and ./old-name/old-name.md\n"}, [], 0),
+        ("a path is masked: no date inside a file name", {"src/a.py": "# the note is docs/archive/2025-03-02-notes.md\n"}, [], 0),
+        ("a slash date is still a date", {"src/a.py": "# changed on 02/03/2025\n"}, [], 1),
+        ("an absolute path in prose is still scanned for the rest of the line", {"src/a.py": "# used to write to /var/log/x.log\n"}, [], 1),
         ("svelte: a script comment is a comment", {"src/A.svelte": "<script>\n// we now fetch once\n</script>\n"}, [], 1),
     ]
     fails = _run_cases("history", "history", history)
