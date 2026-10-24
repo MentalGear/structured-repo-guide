@@ -17,7 +17,8 @@ Usage (run from the repository root; Python 3 standard library only):
     --baseline FILE     the ratchet file (default: history-comments.tsv or comment-refs.tsv in the baselines
                         directory under scripts/, relative to --root)
     --skip PREFIX       skip files whose root-relative path starts with PREFIX (repeatable; adds to SKIP_PREFIXES)
-    --min-date DATE     history only: ISO dates before DATE are data, not history (default: every date counts)
+    --min-date DATE     history only: dates before DATE are data, not history (default: every date counts); a date
+                        written as a month and year, or as dd/mm/yyyy, is placed on the last day of that month or year
     --tracker DIR       refs only: the tracker directory, one file per item, NNN-slug.md, finished ones in DIR/done/
                         (default docs/backlog)
     --word WORD         refs only: the word that introduces a cited id, as in "backlog N" (default backlog). A bare
@@ -29,10 +30,17 @@ Usage (run from the repository root; Python 3 standard library only):
 
 Exit status: 0 clean, 1 violation, 2 bad usage.
 
-What is a comment is decided in ONE place, the SYNTAX table below, keyed by file extension. Add a language by
-adding a row. A comment marker inside a string literal is not a comment. Python docstrings count as comments.
-Known gaps (they only make the check more lenient): code that lives inside a string of another language, and
-multi-line quoted strings in shell.
+What is a comment is decided in ONE place, `syntax_for` and the SYNTAX table below: a file is matched by its extension,
+else by its name (Makefile, Dockerfile, ...), else, for a file with no extension, by its `#!` line. Add a language by
+adding a row. A comment marker inside a string literal is not a comment, and the extractor reads the literals that
+matter for that: Python triple-quoted strings (only a docstring, the first statement of a module, class or function,
+counts as a comment), shell heredoc bodies and multi-line quoted strings, Java, Kotlin, Swift and C# text blocks, and
+JavaScript regex literals (a `/` after an operator, a bracket or a keyword such as `return`).
+Known gaps, which can hide a comment (lenient) or read text as one (strict): code that lives inside a string of
+another language (the comments of a Python file that a heredoc writes are not seen), the `${...}` expressions of a
+JavaScript template literal, a JavaScript `/` after `)` or `}` (read as division even where it opens a regex),
+nested quotes inside shell `$(...)`, and a file without a section model (a Vue or Svelte file is one stream of `<!-- -->`,
+`//` and `/* */` comments, so a `//` in template text reads as a comment).
 
 Citations. The tracker word is often an ordinary English word ("issue", "ticket", "item"), and "the second issue 5
 times larger" is not a citation. So `<word> N` counts as one when (a) it is written `<word> #N`, or (b) the comment
@@ -40,6 +48,11 @@ block also names the tracker (the tracker directory's name, e.g. "backlog", or t
 or more digits and is at most 25 above the highest existing id (it looks like an id) and does not read as a quantity
 ("<word> N of/times/per ..."). With the default word ("backlog") the word itself names the tracker, so every
 `backlog N` counts. A citation that is none of these is not checked: write it `<word> #N`.
+
+Paths. A path a comment names is checked when it starts at a top-level directory of the tree (also with a leading
+`./`), when it is written `./name` for a root-level file, and when it is a bare upper-case Markdown name, which must exist
+somewhere in the tree. Any other bare file name is an example, not a citation. A list of ids stops at a number that a
+noun follows: the tail of "<word> N and 3 others" is a count.
 
 What the history check knows is a list of common shapes (dates, hashes, the PHRASES below). Green means "no common
 shape found", not "clean": a comment can retell history in words no pattern matches.
@@ -51,40 +64,63 @@ A marker without a reason exempts nothing.
 """
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
 
 # --------------------------------------------------------------------------- configuration
-# Comment syntax by extension. Keys: line (markers), block ((start, end) pairs), nested (block comments nest),
-# strings ((delimiter, may_span_lines)), docstrings (delimiters read as comments), hash (a line marker must follow
-# whitespace or one of ;|&( so `$#` and `${#x}` are not comments), chars (C-style 'x' character literals).
+# Comment syntax. Keys: line (markers), block ((start, end) pairs), nested (block comments nest), strings
+# ((delimiter, may_span_lines): the longest delimiter first), docstrings (delimiters read as comments, only where a
+# docstring can stand), hash (a line marker must follow whitespace or one of ;|&( so `$#` and `${#x}` are not
+# comments), chars (C-style 'x' character literals), raw (string delimiters without backslash escapes), heredoc
+# (shell here-documents: the body is text), backslash (a backslash outside a string escapes the next character),
+# regex (JavaScript regex literals), attr (a `#[` is an attribute, not a comment).
 C = dict(line=("//",), block=(("/*", "*/"),), strings=(('"', False),), chars=True)
+TEXTBLOCK = dict(C, strings=(('"""', True), ('"', False)))
 HASH = dict(line=("#",), strings=(('"', False), ("'", False)), hash=True)
+SHELL = dict(line=("#",), strings=(('"', True), ("'", True)), hash=True, raw=("'",), heredoc=True, backslash=True)
+PYTHON = dict(line=("#",), docstrings=('"""', "'''"),
+              strings=(('"""', True), ("'''", True), ('"', False), ("'", False)))
+JS = dict(C, strings=(('"', False), ("'", False), ("`", True)), chars=False, regex=True)
+MAKE = dict(line=("#",), hash=True)
+PHP = dict(line=("//", "#"), block=(("/*", "*/"),), strings=(('"', False), ("'", False)), attr=True)
+SFC = dict(line=("//",), block=(("<!--", "-->"), ("/*", "*/")), strings=(('"', False), ("'", False)))
 SYNTAX = {
-    ".py": dict(line=("#",), docstrings=('"""', "'''"), strings=(('"', False), ("'", False))),
-    ".sh": HASH, ".bash": HASH, ".zsh": HASH,
+    ".py": PYTHON,
+    ".sh": SHELL, ".bash": SHELL, ".zsh": SHELL,
     ".rb": HASH, ".yml": HASH, ".yaml": HASH, ".toml": HASH,
-    ".js": dict(C, strings=(('"', False), ("'", False), ("`", True)), chars=False),
-    ".mjs": dict(C, strings=(('"', False), ("'", False), ("`", True)), chars=False),
-    ".cjs": dict(C, strings=(('"', False), ("'", False), ("`", True)), chars=False),
-    ".jsx": dict(C, strings=(('"', False), ("'", False), ("`", True)), chars=False),
-    ".ts": dict(C, strings=(('"', False), ("'", False), ("`", True)), chars=False),
-    ".tsx": dict(C, strings=(('"', False), ("'", False), ("`", True)), chars=False),
+    ".js": JS, ".mjs": JS, ".cjs": JS, ".jsx": JS, ".ts": JS, ".tsx": JS,
     ".rs": dict(C, nested=True, rust=True),
     ".go": dict(C, strings=(('"', False), ("`", True))),
-    ".java": C, ".kt": C, ".swift": C, ".cs": C,
+    ".java": TEXTBLOCK, ".cs": TEXTBLOCK,
+    ".kt": dict(TEXTBLOCK, nested=True), ".kts": dict(TEXTBLOCK, nested=True), ".swift": dict(TEXTBLOCK, nested=True),
     ".c": C, ".h": C, ".cpp": C, ".hpp": C,
     ".css": dict(block=(("/*", "*/"),), strings=(('"', False), ("'", False))),
     ".scss": dict(line=("//",), block=(("/*", "*/"),), strings=(('"', False), ("'", False))),
     ".sql": dict(line=("--",), block=(("/*", "*/"),), strings=(("'", True),)),
     ".lua": dict(line=("--",), block=(("--[[", "]]"),), strings=(('"', False), ("'", False))),
     ".html": dict(block=(("<!--", "-->"),)),
+    ".php": PHP, ".vue": SFC, ".svelte": SFC, ".mk": MAKE,
 }
+# A file whose NAME decides (no extension, or one the table does not know), then a `#!` line for an extensionless file.
+FILENAMES = {
+    "Makefile": MAKE, "makefile": MAKE, "GNUmakefile": MAKE,
+    "Dockerfile": HASH, "Containerfile": HASH,
+    "Gemfile": HASH, "Rakefile": HASH, "Vagrantfile": HASH, "Justfile": HASH, "justfile": HASH,
+}
+FILENAME_PREFIXES = (("Dockerfile.", HASH), ("Containerfile.", HASH))
+SHEBANGS = (
+    (re.compile(r"^(?:sh|bash|zsh|dash|ash|ksh)$"), SHELL),
+    (re.compile(r"^python[\d.]*$"), PYTHON),
+    (re.compile(r"^(?:node|nodejs|deno|bun)$"), JS),
+    (re.compile(r"^(?:ruby|perl)$"), HASH),
+    (re.compile(r"^php[\d.]*$"), PHP),
+)
 # Paths (root-relative prefixes) that are never scanned: history is allowed in docs, baselines are data,
-# vendored and generated trees are not ours.
+# vendored and generated trees are not ours. A directory NAME in SKIP_DIRNAMES is skipped at any depth.
 SKIP_PREFIXES = ("docs/", "scripts/baselines/", "node_modules/", "vendor/", "target/", "dist/", "build/", "third_party/")
-SKIP_DIRNAMES = {".git", "node_modules", "__pycache__", ".venv", "target", "dist", "build"}
+SKIP_DIRNAMES = {".git", "node_modules", "__pycache__", ".venv", "venv", ".tox", "target", "dist", "build"}
 SKIP_SUFFIXES = (".min.js", ".lock")
 # Upstream revisions pinned on purpose are provenance, not history; list their prefixes here. The form
 # `<path> @ <sha>` is always provenance.
@@ -95,17 +131,71 @@ REFS_BASELINE = "scripts/baselines/comment-refs.tsv"
 
 
 # --------------------------------------------------------------------------- files
-def tracked_files(root, skip):
-    """Root-relative paths of every file with a known comment syntax, sorted."""
+def listed_paths(root):
+    """Root-relative paths of every file under root, sorted. Inside a git work tree this is git's view (tracked and
+    untracked files, minus what .gitignore ignores, so a virtualenv or a build tree is never scanned); anywhere else,
+    or without git, it is a directory walk that skips the names in SKIP_DIRNAMES."""
+    try:
+        r = subprocess.run(["git", "-C", root, "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+                           capture_output=True, timeout=120)
+    except (OSError, subprocess.SubprocessError):
+        r = None
+    if r is not None and r.returncode == 0:
+        paths = r.stdout.decode("utf-8", "surrogateescape").split("\0")
+        return sorted({p for p in paths if p and os.path.isfile(os.path.join(root, p))})
     out = []
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRNAMES)
         for f in filenames:
-            p = os.path.relpath(os.path.join(dirpath, f), root).replace(os.sep, "/")
-            if p.startswith(tuple(skip)) or p.endswith(SKIP_SUFFIXES):
-                continue
-            if os.path.splitext(p)[1] in SYNTAX:
-                out.append(p)
+            out.append(os.path.relpath(os.path.join(dirpath, f), root).replace(os.sep, "/"))
+    return sorted(out)
+
+
+def shebang_syntax(full):
+    """The syntax a `#!` line names, or None."""
+    try:
+        with open(full, "rb") as fh:
+            first = fh.readline(200)
+    except OSError:
+        return None
+    if not first.startswith(b"#!"):
+        return None
+    words = first[2:].decode("utf-8", "replace").split()
+    if not words:
+        return None
+    prog = os.path.basename(words[0])
+    if prog == "env":
+        rest = [w for w in words[1:] if not w.startswith("-") and "=" not in w]
+        prog = os.path.basename(rest[0]) if rest else ""
+    return next((syn for rx, syn in SHEBANGS if rx.match(prog)), None)
+
+
+def syntax_for(root, path):
+    """The comment syntax of a file, or None when it is not one the table knows."""
+    base = os.path.basename(path)
+    ext = os.path.splitext(base)[1]
+    if ext in SYNTAX:
+        return SYNTAX[ext]
+    if base in FILENAMES:
+        return FILENAMES[base]
+    for prefix, syn in FILENAME_PREFIXES:
+        if base.startswith(prefix):
+            return syn
+    if ext == "":
+        return shebang_syntax(os.path.join(root, path))
+    return None
+
+
+def tracked_files(root, skip):
+    """Root-relative paths of every file with a known comment syntax, sorted."""
+    out = []
+    for p in listed_paths(root):
+        if p.startswith(tuple(skip)) or p.endswith(SKIP_SUFFIXES):
+            continue
+        if any(part in SKIP_DIRNAMES for part in p.split("/")[:-1]):
+            continue
+        if syntax_for(root, p) is not None:
+            out.append(p)
     return sorted(out)
 
 
@@ -115,46 +205,116 @@ def _emit_block(out, start_line, raw, strip_star):
         out.append((start_line + k, re.sub(r"^\s*\*+ ?", "", ln) if strip_star else ln))
 
 
+REGEX_BEFORE = set("(,=:[!&|?{};<>~^%*")
+REGEX_KEYWORDS = {"return", "typeof", "case", "in", "of", "delete", "void", "throw", "new", "else", "do",
+                  "instanceof", "yield", "await"}
+HEREDOC = re.compile(r"<<(-?)[ \t]*(?:'([^'\n]*)'|\"([^\"\n]*)\"|\\?([A-Za-z_][A-Za-z0-9_]*))")
+PY_DOC_AFTER = ("", "def", "class", "async")
+
+
+def _regex_end(text, i):
+    """If the `/` at i opens a JavaScript regex literal, the index just past it, else 0. A regex may follow an
+    operator, an opening bracket or a keyword; after an identifier, a number or a closing bracket the `/` divides."""
+    k = i - 1
+    while k >= 0 and text[k] in " \t\r\n":
+        k -= 1
+    if k >= 0:
+        ch = text[k]
+        if ch.isalnum() or ch in "_$":
+            e = k
+            while k >= 0 and (text[k].isalnum() or text[k] in "_$"):
+                k -= 1
+            if text[k + 1:e + 1] not in REGEX_KEYWORDS:
+                return 0
+        elif ch not in REGEX_BEFORE:
+            return 0
+    j, in_class = i + 1, False
+    while j < len(text):
+        ch = text[j]
+        if ch == "\n":
+            return 0
+        if ch == "\\":
+            j += 2
+            continue
+        if ch == "[":
+            in_class = True
+        elif ch == "]":
+            in_class = False
+        elif ch == "/" and not in_class:
+            return j + 1
+        j += 1
+    return 0
+
+
 def extract(text, syn):
     """[(line_number, body)] for every comment line; a block comment gives one entry per physical line."""
     out = []
     i, n, line = 0, len(text), 1
     blocks, lines_, strings = syn.get("block", ()), syn.get("line", ()), syn.get("strings", ())
     docs = syn.get("docstrings", ())
+    raw_delims = syn.get("raw", ())
+    pending = []  # shell here-documents opened on the current line: (delimiter, strip leading tabs)
+    # Python statement state: a triple-quoted string is a docstring (a comment) only as the FIRST statement of a
+    # module, class or function; anywhere else it is a string.
+    depth, stmt_start, first_word, first_pos, prev_first, doc_pos_ok = 0, True, None, -1, "", False
     while i < n:
         c = text[i]
         if c == "\n":
             line += 1
             i += 1
+            if docs and depth == 0 and not text.startswith("\\", i - 2):
+                if first_word is not None:
+                    prev_first, first_word = first_word, None
+                stmt_start = True
+            while pending:
+                delim, strip = pending.pop(0)
+                while i < n:
+                    e = text.find("\n", i)
+                    e = n if e < 0 else e
+                    body = text[i:e].rstrip("\r")
+                    i = min(e + 1, n)
+                    line += 1 if e < n else 0
+                    if (body.lstrip("\t") if strip else body) == delim:
+                        break
             continue
+        if docs and stmt_start and first_word is None and not c.isspace() and c != "#":
+            wm = re.match(r"\w+", text[i:i + 40])
+            first_word, first_pos, stmt_start = (wm.group(0) if wm else c), i, False
+            doc_pos_ok = prev_first in PY_DOC_AFTER
         hit = next(((s, e) for s, e in blocks if text.startswith(s, i)), None)
         if hit:
             s, e = hit
-            j, depth = i + len(s), 1
-            while j < n and depth:
+            j, depth_ = i + len(s), 1
+            while j < n and depth_:
                 if syn.get("nested") and text.startswith(s, j):
-                    depth += 1
+                    depth_ += 1
                     j += len(s)
                 elif text.startswith(e, j):
-                    depth -= 1
+                    depth_ -= 1
                     j += len(e)
                 else:
                     j += 1
-            end = j - len(e) if depth == 0 else j
+            end = j - len(e) if depth_ == 0 else j
             _emit_block(out, line, text[i + len(s):max(i + len(s), end)], True)
             line += text.count("\n", i, j)
             i = j
             continue
+        if syn.get("backslash") and c == "\\":
+            line += text.startswith("\n", i + 1)
+            i += 2
+            continue
         d = next((d for d in docs if text.startswith(d, i)), None)
-        if d:
+        if d and doc_pos_ok and (first_pos == i or (text[first_pos:i].lower() in ("r", "u") and first_pos + 1 == i)):
             j = text.find(d, i + len(d))
             j = n if j < 0 else j + len(d)
             _emit_block(out, line, text[i + len(d):max(i + len(d), j - len(d))], False)
             line += text.count("\n", i, j)
             i = j
+            doc_pos_ok = False
             continue
         m = next((m for m in lines_ if text.startswith(m, i)), None)
-        if m and (not syn.get("hash") or i == 0 or text[i - 1] in " \t;|&(\n"):
+        if m and (not syn.get("hash") or i == 0 or text[i - 1] in " \t;|&(\n") \
+                and not (syn.get("attr") and text.startswith("#[", i)):
             j = text.find("\n", i)
             j = n if j < 0 else j
             body = text[i + len(m):j]
@@ -164,6 +324,16 @@ def extract(text, syn):
                 out.append((line, body[1:] if m == "//" and body[:1] in ("/", "!") else body))
             i = j
             continue
+        if syn.get("heredoc") and text.startswith("<<", i) and not text.startswith("<<<", i):
+            hm = HEREDOC.match(text, i)
+            if hm:
+                delim = next(g for g in hm.groups()[1:] if g is not None)
+                ls = text.rfind("\n", 0, i) + 1
+                body_ok = re.search(r"(?m)^%s%s\r?$" % ("\t*" if hm.group(1) else "", re.escape(delim)), text[hm.end():])
+                if "((" not in text[ls:i] and body_ok:
+                    pending.append((delim, bool(hm.group(1))))
+                    i = hm.end()
+                    continue
         if syn.get("rust") and c in "rb" and not (i and (text[i - 1].isalnum() or text[i - 1] == "_")):
             rm = re.match(r'b?r(#*)"', text[i:i + 12])
             if rm:
@@ -182,25 +352,33 @@ def extract(text, syn):
             else:
                 i += 1  # a lifetime or label
             continue
+        if syn.get("regex") and c == "/":
+            j = _regex_end(text, i)
+            if j:
+                i = j
+                continue
         s = next(((d, multi) for d, multi in strings if text.startswith(d, i)), None)
         if s:
             d, multi = s
+            raw = d in raw_delims and not (i and text[i - 1] == "$")
             j = i + len(d)
             while j < n and not text.startswith(d, j):
                 if text[j] == "\n" and not multi:
                     break
-                j += 2 if text[j] == "\\" else 1
+                j += 1 if raw else (2 if text[j] == "\\" else 1)
             stop = j if (j >= n or text[j] == "\n") and not text.startswith(d, j) else j + len(d)
             line += text.count("\n", i, min(stop, n))
             i = stop
             continue
+        if docs:
+            depth = depth + 1 if c in "([{" else max(depth - 1, 0) if c in ")]}" else depth
         i += 1
     return out
 
 
 def comments_of(root, path):
     with open(os.path.join(root, path), encoding="utf-8", errors="replace") as fh:
-        return extract(fh.read(), SYNTAX[os.path.splitext(path)[1]])
+        return extract(fh.read(), syntax_for(root, path))
 
 
 # --------------------------------------------------------------------------- history detection
@@ -210,13 +388,9 @@ PHRASES = [
     (re.compile(r"\bbefore the (?:fix|change|rewrite|refactor|migration)\b", re.I), "before the fix"),
     (re.compile(r"\bformerly\b", re.I), "formerly"),
     (re.compile(r"\bold (?:behaviou?r|implementation|approach|name)\b", re.I), "old behaviour"),
-    (re.compile(r"\b(?:was|were|got|has been|have been) (?:changed|renamed|rewritten|replaced|removed|dropped)\b", re.I),
-     "was changed"),
     (re.compile(r"\bwas\s+\S+(?:\s+\S+){0,2},\s*(?:and\s+)?now\b", re.I), "was X, now Y"),
     (re.compile(r"\bwe (?:now|used to|no longer|previously)\b", re.I), "we now"),
     (re.compile(r"\bnow (?:uses|reads|writes|goes|lives|comes|calls|returns|lets|owns|runs|derives)\b", re.I), "now uses"),
-    (re.compile(r"\bno longer (?:uses|reads|writes|carries|ships|sets|renders|needs|does|do|owns|"
-                r"holds|lives|calls|emits|paints|draws|returns|takes)", re.I), "no longer"),
     (re.compile(r"\bsince (?:been )?(?:removed|replaced|renamed|dropped|fixed)\b", re.I), "was changed"),
     (re.compile(r"\b(?:after|following|since) (?:the|a|an) (?:incident|outage|regression|post-?mortem|bug report)\b",
                 re.I), "incident"),
@@ -241,13 +415,65 @@ USED_TO = re.compile(r"(?:\b(\w+)\s+)?\bused to\b", re.I)
 # "is used to X", "can be used to X": the instrument sense, not history.
 PASSIVE_PREV = {"is", "are", "be", "been", "being", "was", "were", "get", "gets", "got", "it's", "also", "only",
                 "then", "often", "just", "can", "could", "may", "might", "must", "should", "will", "would",
-                "not", "if", "when", "that", "which", "and", "or", "both", "either", "so", "thus", "than"}
+                "not", "if", "when", "and", "or", "both", "either", "so", "thus", "than"}
 PREVIOUSLY = re.compile(r"\bpreviously\b(?!-)(?:\s+(\w+))?", re.I)
-# A participle after the word describes a state of the element, not a story; a comma after the word, or a
-# preceding auxiliary verb, makes it a story.
-PREVIOUSLY_STATE_OK = re.compile(r"(?:ed|en|n|t|d)$|^(?:set|read|run|put|shown|sent|hidden|open|active|visible)$")
+# The word describes a state when a determiner (or a preposition or conjunction that continues a noun phrase) stands
+# before it and a participle after it (the focused element). It tells a story when it opens a clause or follows a
+# pronoun or an auxiliary.
+PREVIOUSLY_DET = {"the", "a", "an", "its", "their", "his", "her", "our", "your", "my", "this", "that", "these", "those",
+                  "any", "each", "every", "all", "of", "to", "from", "with", "for", "by", "and", "or", "no"}
+PREVIOUSLY_IRREGULAR = {"set", "read", "run", "put", "shown", "sent", "hidden", "open", "active", "visible", "built",
+                        "kept", "left", "found", "held", "made", "seen", "known", "given", "taken", "done", "lost"}
+# A passive change verb is history when it is about the code and runtime when a named actor (RUNTIME_ACTOR) or a data
+# structure (RUNTIME_DATA) did it, as in a value changed by the caller or a field removed from the payload.
+PASSIVE_CHANGE = re.compile(r"\b(?:was|were|got|has been|have been) (?:changed|renamed|rewritten|replaced|removed|dropped)\b"
+                            r"(?P<rest>[^.;]*)", re.I)
+RUNTIME_ACTOR = (r"caller|callee|user|server|client|browser|host|parent|child|consumer|producer|sender|receiver|peer|"
+                 r"plugin|handler|service|backend|frontend|runtime|kernel|driver|library|application|app|operator|admin|"
+                 r"owner|reader|writer|listener|observer|subscriber|publisher|provider|framework|engine|scheduler|"
+                 r"compiler|hook|middleware|network|proxy|os")
+RUNTIME_DATA = (r"payload|request|response|message|input|output|list|queue|map|set|cache|table|array|buffer|stream|"
+                r"file|document|dom|tree|registry|store|database|db|collection|batch|row|record|result|results|page|"
+                r"form|state|session|body|header|headers|url|path|query|object|config|configuration|environment")
+RUNTIME_PASSIVE = re.compile(r"^\s+(?:\w+\s+){0,3}?(?:by (?:the|a|an|its|each|any|that|this) (?:%s)\b|"
+                             r"(?:from|in|into|on) (?:the|a|an|its|each|that|this) (?:%s)\b)" % (RUNTIME_ACTOR, RUNTIME_DATA), re.I)
+CONDITIONAL = re.compile(r"\b(?:when|once|if|until|unless|whenever|whether|while|as soon as)\b", re.I)
+NO_LONGER = re.compile(r"\bno longer\b(?!\s+(?:than|then)\b)", re.I)
+CLAUSE_BREAK = re.compile(r"[,;:.()]")
+# A date that is not written ISO. Month names are matched capitalised ("May" the month, never "may" the verb).
+MONTHS = ("January", "February", "March", "April", "May", "June", "July", "August", "September", "October",
+          "November", "December")
+MONTH_RX = r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|June?|July?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|" \
+           r"Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)"
+FULL_MONTH_RX = r"(?:%s)" % "|".join(MONTHS)
+MONTH_YEAR = re.compile(r"\b(%s)\.?,?\s+(?:\d{1,2}(?:st|nd|rd|th)?,?\s+)?((?:19|20)\d\d)\b" % MONTH_RX)
+MONTH_DAY = re.compile(r"\b%s\s+\d{1,2}(?:st|nd|rd|th)?\b(?!\s*(?:items?|times|of|%%|x\b))" % FULL_MONTH_RX)
+SINCE_MONTH = re.compile(r"\b(?:since|as of|until|after|before|in|during|from)\s+(?:early |late |mid-)?%s\b" % FULL_MONTH_RX)
+SLASH_DATE = re.compile(r"(?<![\w/.-])(\d{1,2})/(\d{1,2})/((?:19|20)\d\d|\d\d)(?![\w/])")
+DOT_DATE = re.compile(r"(?<![\w.])(\d{1,2})\.(\d{1,2})\.((?:19|20)\d\d)(?![\w.])")
 MARK_HISTORY = re.compile(r"history-ok:\s*\S")
 MARK_REF = re.compile(r"ref-ok:\s*\S")
+
+
+def _loose_date(body, min_date):
+    """True when body has a date that is not written ISO and is not before min_date. A month and year is placed on the
+    last day of that month, dd/mm/yyyy on the last day of the year, and a month name alone on no day (it always counts)."""
+    for m in MONTH_YEAR.finditer(body):
+        month = next(i for i, name in enumerate(MONTHS, 1) if name.startswith(m.group(1)[:3]))
+        if "%s-%02d-31" % (m.group(2), month) >= min_date:
+            return True
+    for m in SLASH_DATE.finditer(body):
+        a, b, y = int(m.group(1)), int(m.group(2)), m.group(3)
+        if a <= 31 and b <= 31 and (a <= 12 or b <= 12) and ("%s-12-31" % (y if len(y) == 4 else "20" + y)) >= min_date:
+            return True
+    for m in DOT_DATE.finditer(body):
+        if int(m.group(1)) <= 31 and int(m.group(2)) <= 31 and "%s-12-31" % m.group(3) >= min_date:
+            return True
+    return bool(MONTH_DAY.search(body) or SINCE_MONTH.search(body))
+
+
+def _clause_before(body, pos):
+    return CLAUSE_BREAK.split(body[:pos])[-1]
 
 
 def history_reason(body, min_date="0000-01-01"):
@@ -257,6 +483,8 @@ def history_reason(body, min_date="0000-01-01"):
     for m in DATE.finditer(body):
         if "-".join(m.groups()) >= min_date:
             return "date"
+    if _loose_date(body, min_date):
+        return "date"
     for m in HEX.finditer(body):
         tok = m.group(0)
         if re.search(r"\d", tok) and len(re.findall(r"[a-f]", tok)) >= 2 and not re.fullmatch(r"\d+e\d+", tok):
@@ -266,6 +494,13 @@ def history_reason(body, min_date="0000-01-01"):
     for rx, why in PHRASES:
         if rx.search(body):
             return why
+    for m in PASSIVE_CHANGE.finditer(body):
+        if RUNTIME_PASSIVE.match(m.group("rest")) or CONDITIONAL.search(_clause_before(body, m.start())):
+            continue
+        return "was changed"
+    for m in NO_LONGER.finditer(body):
+        if not CONDITIONAL.search(_clause_before(body, m.start())):
+            return "no longer"
     for m in USED_TO.finditer(body):
         if (m.group(1) or "").lower() not in PASSIVE_PREV:
             return "used to"
@@ -273,9 +508,10 @@ def history_reason(body, min_date="0000-01-01"):
         if re.search(r"\b(?:whatever|what|that|which)\s+(?:was|were|is)\s+$", body[:m.start()], re.I):
             continue
         nxt = (m.group(1) or "").lower()
-        if not nxt or not PREVIOUSLY_STATE_OK.search(nxt):
-            return "previously"
-        if re.search(r"\b(?:was|were|had|did) previously\b|previously,", body, re.I):
+        words = re.findall(r"[\w']+", body[:m.start()])
+        prev = words[-1].lower() if words else ""
+        participle = nxt.endswith(("ed", "en")) or nxt in PREVIOUSLY_IRREGULAR
+        if not (nxt and participle and prev in PREVIOUSLY_DET) or re.search(r"previously,", body, re.I):
             return "previously"
     return None
 
@@ -315,6 +551,7 @@ def cmd_history(root, opts):
         for p in sorted(hits):
             for ln, why, text in hits[p]:
                 print(f"{p}:{ln}\t{why}\t{text[:140]}")
+        sys.stdout.flush()  # the summary is the LAST line of `2>&1`: the worklist must not trail it
         print(f"history: {sum(counts.values())} lines in {len(counts)} files", file=sys.stderr)
         return 0
     base = {k: int(v) for k, _, v in (ln.partition("\t") for ln in read_lines(base_path))}
@@ -370,13 +607,25 @@ def tracker_ids(tracker):
     return ids
 
 
+# A bare upper-case Markdown name lives at the root by convention (a README, a BACKLOG): it must exist somewhere in
+# the tree. Any other bare file name is as often an example as a citation and is not checked. A name written with a
+# leading `./` and no further slash is an unmistakable root-relative path and must exist at the root.
+ROOT_NAMES = r"[A-Z][A-Z0-9_-]*\.md"
+ROOT_DOT = r"\./[A-Za-z0-9_][A-Za-z0-9_.-]*\.[A-Za-z0-9]+"
+# A number that continues an id list is not one when a noun follows it: the tail of "<word> N and 3 others" is a count.
+NOT_AN_ID = r"(?!\s+(?:of|times|per|percent|others?|more|items?|rows?|cases?|places?|files?|tickets?|issues?|ids?|" \
+            r"entries|lines?|sites?|callers?|users?|bytes|ms|seconds?|minutes?|hours?|days?)\b)"
+
+
 def make_patterns(root, word):
     tops = sorted(d for d in os.listdir(root) if os.path.isdir(os.path.join(root, d)) and d not in SKIP_DIRNAMES)
-    path_rx = re.compile(r"(?<![\w./@~-])(?:%s)/[A-Za-z0-9_.\-/\[\]*<>{}$…]*" % "|".join(map(re.escape, tops))) \
+    path_rx = re.compile(r"(?<![\w./@~-])(?:\./)?(?:%s)/[A-Za-z0-9_.\-/\[\]*<>{}$\u2026]*" % "|".join(map(re.escape, tops))) \
         if tops else None
+    name_rx = re.compile(r"(?<![\w./@~-])(?:%s|%s)(?![\w/-]|\.\w)" % (ROOT_NAMES, ROOT_DOT))
     num = r"#?(\d{1,6})(?!\d|-\d\d-)[a-z]?"
-    cite_rx = re.compile(r"\b%s(?:\s+(?:item|row|id))?\s+%s((?:\s*(?:,|/|&|and|-|to)\s*%s)*)" % (re.escape(word), num, num), re.I)
-    return path_rx, cite_rx
+    more = num + NOT_AN_ID
+    cite_rx = re.compile(r"\b%s(?:\s+(?:item|row|id))?\s+%s((?:\s*(?:,|/|&|and|-|to)\s*%s)*)" % (re.escape(word), num, more), re.I)
+    return path_rx, name_rx, cite_rx
 
 
 NEAR = 25  # a bare number is "id-like" when it has 3+ digits and is at most this far above the highest id
@@ -408,7 +657,7 @@ def is_citation(m, ids, names_tracker):
     return len(first) >= 3 and int(first) <= max(ids, default=0) + NEAR
 
 
-def refs_in(blocks, ids, path_rx, cite_rx, tracker_rx):
+def refs_in(blocks, ids, path_rx, name_rx, cite_rx, tracker_rx):
     """[(line, kind, ref)] cited in a comment and not resolved by the id set (paths are checked by the caller)."""
     bad = []
     for span in blocks_of(blocks):
@@ -430,22 +679,30 @@ def refs_in(blocks, ids, path_rx, cite_rx, tracker_rx):
                     tok = m.group(0).rstrip(".-")
                     if not PLACEHOLDER.search(tok):
                         bad.append((ln, "path", tok))
+            for m in name_rx.finditer(body):
+                bad.append((ln, "name", m.group(0)))
     return bad
 
 
 def scan_refs(root, files, tracker, word):
     ids = tracker_ids(os.path.join(root, tracker))
-    path_rx, cite_rx = make_patterns(root, word)
+    path_rx, name_rx, cite_rx = make_patterns(root, word)
     names = {os.path.basename(tracker.rstrip("/")).lower(), "tracker"}
     tracker_rx = re.compile(r"\b(?:%s)\b" % "|".join(map(re.escape, sorted(names))), re.I)
+    basenames = {os.path.basename(p) for p in listed_paths(root)}
     out = {}
     for p in files:
         res = []
-        for ln, kind, ref in refs_in(comments_of(root, p), ids, path_rx, cite_rx, tracker_rx):
+        for ln, kind, ref in refs_in(comments_of(root, p), ids, path_rx, name_rx, cite_rx, tracker_rx):
             if kind == "path":
-                ref = re.sub(r":\d+(?:-\d+)?$", "", ref)
-                if os.path.exists(os.path.join(root, ref)) or os.path.exists(os.path.join(root, ref.rstrip("/"))):
+                target = re.sub(r":\d+(?:-\d+)?$", "", ref)
+                target = target[2:] if target.startswith("./") else target
+                if os.path.exists(os.path.join(root, target)) or os.path.exists(os.path.join(root, target.rstrip("/"))):
                     continue
+            elif kind == "name":
+                if (os.path.exists(os.path.join(root, ref[2:])) if ref.startswith("./") else ref in basenames):
+                    continue
+                kind = "path"
             res.append((ln, kind, ref))
         if res:
             out[p] = res
@@ -464,6 +721,7 @@ def cmd_refs(root, opts):
         for p in sorted(found):
             for ln, kind, ref in found[p]:
                 print(f"{p}:{ln}\t{kind}\t{ref}")
+        sys.stdout.flush()
         print(f"refs: {len(keys)} unresolved reference(s)", file=sys.stderr)
         return 0
     base_lines = set(read_lines(base_path))
@@ -551,7 +809,7 @@ def self_test_history():
         ("baselined history passes", {"src/a.py": "# used to be 3\nx = 1\n"}, one, 0),
         ("python: dated comment in a clean file", {"src/a.py": "# changed on 2025-03-02\nx = 1\n"}, [], 1),
         ("python: docstring is a comment", {"src/a.py": 'def f():\n    """Previously, this retried twice."""\n'}, [], 1),
-        ("typescript: commit hash", {"src/a.ts": "// fixed in 98e7ca1b\nconst x = 1;\n"}, [], 1),
+        ("typescript: commit hash", {"src/a.ts": "// fixed in 3fa9c21b\nconst x = 1;\n"}, [], 1),
         ("rust: doc comment, no longer", {"src/a.rs": "/// no longer uses the shared timer\nfn a() {}\n"}, [], 1),
         ("rust: block comment line", {"src/a.rs": "/*\n * was 3px, now 2px\n */\nfn a() {}\n"}, [], 1),
         ("css: formerly", {"src/a.css": "/* formerly 2px */\na { top: 0 }\n"}, [], 1),
@@ -584,6 +842,60 @@ def self_test_history():
         ("a present-tense reason with `kept for backward compatibility` passes", {"src/a.py": "# kept for backward compatibility with v1 callers\n"}, [], 0),
         ("a width that is fixed passes", {"src/a.css": "/* fixed at 3 columns; the width is fixed in the constructor */\na { top: 0 }\n"}, [], 0),
         ("`removed items` and a deprecation window pass", {"src/a.py": "# removed items are listed in the footer; deprecated flags warn\n"}, [], 0),
+        # dates that are not ISO
+        ("a month and year is a date", {"src/a.py": "# changed in March 2025\nx = 1\n"}, [], 1),
+        ("a month, day and year is a date", {"src/a.ts": "// moved on Mar 3, 2025\n"}, [], 1),
+        ("`since <Month>` is a date", {"src/a.py": "# the retry is off since March\n"}, [], 1),
+        ("dd/mm/yyyy is a date", {"src/a.py": "# raised on 02/03/2025\n"}, [], 1),
+        ("dd.mm.yyyy is a date", {"src/a.py": "# raised on 02.03.2025\n"}, [], 1),
+        ("--min-date also places a month and year", {"src/a.py": "# fixture of March 2019\n"}, [], 0, ["--min-date", "2024-01-01"]),
+        ("the verb `may` and a march of items are not dates", {"src/a.py": "# a caller may retry; the march of 3 items\n"}, [], 0),
+        ("a path of numbers is not a date", {"src/a.py": "# see v1/2/2024x and a/10/11/2025\n"}, [], 0),
+        # stories that a clause-opening or relative-pronoun form tells
+        ("`Previously it returned nil` is a story", {"src/a.go": "// Previously it returned nil on timeout\n"}, [], 1),
+        ("`it previously returned` is a story", {"src/a.go": "// it previously returned nil\n"}, [], 1),
+        ("`which used to be a timer` is a story", {"src/a.ts": "// a frame callback, which used to be a timer\n"}, [], 1),
+        ("`that used to live here` is a story", {"src/a.py": "# the value that used to live here\n"}, [], 1),
+        ("`the previously returned page` is a state", {"src/a.py": "# the previously returned page stays visible\n"}, [], 0),
+        ("`and previously selected rows` is a state", {"src/a.py": "# the focused and previously selected rows\n"}, [], 0),
+        # a retired behaviour, and its conditional and length look-alikes
+        ("`no longer used by` is history", {"src/a.rs": "// no longer used by the renderer\nfn a() {}\n"}, [], 1),
+        ("`no longer retries on 429` is history", {"src/a.ts": "// no longer retries on 429\n"}, [], 1),
+        ("`no longer than` is a length", {"src/a.py": "# a name no longer than 80 characters\n"}, [], 0),
+        ("`once it is no longer referenced` is a condition", {"src/a.py": "# freed once it is no longer referenced\n"}, [], 0),
+        # a passive verb about runtime data, not about the code
+        ("a value changed by the caller is runtime", {"src/a.py": "# returns a value that was changed by the caller\n"}, [], 0),
+        ("a field removed from the payload by the server is runtime", {"src/a.py": "# the field was removed from the payload by the server\n"}, [], 0),
+        ("`if the item was removed` is a condition", {"src/a.py": "# if the item was removed, skip it\n"}, [], 0),
+        ("`was replaced by a map` is history", {"src/a.py": "# the loop was replaced by a map\n"}, [], 1),
+        # the lexer: what is a comment
+        ("js: a regex literal does not open a block comment", {"src/a.js": 'const r = /\\/*$/;\nconst m = "used to retry";\n'}, [], 0),
+        ("js: a regex after `return` and a division are told apart", {"src/a.js": "function f(a, b) { return /[/*]x/.test(a) || a / b / 2; }\n// used to\n"}, [], 1),
+        ("python: a triple-quoted string that is not a docstring is a string", {"src/a.py": 'SQL = """\n-- used to be a view\n"""\n'}, [], 0),
+        ("python: a module docstring is a comment", {"src/a.py": '"""Previously this was a script."""\nx = 1\n'}, [], 1),
+        ("python: a class docstring is a comment", {"src/a.py": 'class A:\n    """Formerly a function."""\n'}, [], 1),
+        ("python: a docstring after a multi-line signature is a comment", {"src/a.py": 'def f(\n    a,\n    b,\n):\n    """Formerly took one argument."""\n'}, [], 1),
+        ("python: a string statement after code is a string", {"src/a.py": 'def f():\n    x = 1\n    """formerly x"""\n'}, [], 0),
+        ("python: a triple-quoted default in a call is a string", {"src/a.py": 'run(\n    """\n# used to\n""",\n)\n'}, [], 0),
+        ("shell: a heredoc body is text", {"src/a.sh": "cat <<EOF\n# used to be 3\nEOF\necho ok\n"}, [], 0),
+        ("shell: a quoted, tab-stripped heredoc body is text", {"src/a.sh": "cat <<-'END'\n\t# used to be 3\n\tEND\n"}, [], 0),
+        ("shell: a comment after a heredoc is a comment", {"src/a.sh": "cat <<EOF\nx\nEOF\n# used to be 3\n"}, [], 1),
+        ("shell: `<<` in arithmetic opens no heredoc", {"src/a.sh": "x=$((1<<n))\n# used to be 3\n"}, [], 1),
+        ("shell: a multi-line single-quoted string is text", {"src/a.sh": "echo 'a\n# used to be 3\nb'\n"}, [], 0),
+        ("shell: a backslash-escaped quote opens no string", {"src/a.sh": "echo it\\'s fine\n# used to be 3\n"}, [], 1),
+        ("java: a text block is a string", {"src/A.java": 'class A { String s = """\n  // used to\n  """; }\n'}, [], 0),
+        ("kotlin: a text block is a string", {"src/a.kt": 'val s = """\n// used to\n"""\n'}, [], 0),
+        # G3: the syntax is found by name and by `#!` line, and the table has more rows
+        ("Dockerfile is scanned", {"Dockerfile": "FROM x\n# we now pin the digest\n"}, [], 1),
+        ("Dockerfile.dev is scanned", {"Dockerfile.dev": "FROM x\n# used to be alpine\n"}, [], 1),
+        ("Makefile is scanned", {"Makefile": "all:\n\t@echo hi\n# before the fix this was cc\n"}, [], 1),
+        ("an extensionless sh script is scanned by its shebang", {"bin/run": "#!/bin/sh\n# used to take two arguments\n"}, [], 1),
+        ("an extensionless env python script is scanned by its shebang", {"bin/tool": "#!/usr/bin/env python3\n# used to\n"}, [], 1),
+        ("an extensionless file with no shebang is not scanned", {"bin/notes": "# used to\n"}, [], 0),
+        ("php: `//`, `#` and block comments are comments", {"src/a.php": "<?php\n// used to\n"}, [], 1),
+        ("php: `#[Attribute]` is not a comment", {"src/a.php": "<?php\n#[Route('/x')] // clean\n"}, [], 0),
+        ("vue: an HTML comment is a comment", {"src/A.vue": "<template><!-- used to be a list --></template>\n"}, [], 1),
+        ("svelte: a script comment is a comment", {"src/A.svelte": "<script>\n// we now fetch once\n</script>\n"}, [], 1),
     ]
     fails = _run_cases("history", "history", history)
     # the ratchet commands themselves
@@ -599,7 +911,53 @@ def self_test_history():
     ok = rc == 0
     fails += not ok
     print(f"  {'ok  ' if ok else 'FAIL'} --update-baseline locks a drop in (rc {rc}, want 0)")
+    fails += _self_test_inventory_order()
+    fails += _self_test_git_view()
+    return fails
 
+
+def _self_test_inventory_order():
+    """`--inventory 2>&1 | tail -1` must print the summary: the worklist is flushed before the summary line."""
+    fails = 0
+    for kind, files in (("history", {"src/a.py": "# used to a\n# used to b\n"}),
+                        ("refs", {"docs/backlog/001-x.md": "x", "src/a.py": "# backlog 98\n# backlog 99\n"})):
+        with tempfile.TemporaryDirectory(prefix="comment-scan-") as d:
+            for p, text in files.items():
+                os.makedirs(os.path.dirname(os.path.join(d, p)), exist_ok=True)
+                with open(os.path.join(d, p), "w", encoding="utf-8") as fh:
+                    fh.write(text)
+            r = subprocess.run([sys.executable, "-I", os.path.abspath(__file__), kind, "--root", d, "--inventory"],
+                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        last = r.stdout.rstrip("\n").split("\n")[-1]
+        ok = r.returncode == 0 and last.startswith(kind + ":")
+        fails += not ok
+        print(f"  {'ok  ' if ok else 'FAIL'} {kind} --inventory 2>&1: the last line is the summary ({last[:40]!r})")
+    return fails
+
+
+def _self_test_git_view():
+    """Inside a git work tree the scan is git's view: an ignored tree is skipped whatever its name, an untracked file
+    that is not ignored is scanned. Needs git; the case is skipped, and says so, without it."""
+    if shutil.which("git") is None:
+        print("  skip a git work tree is scanned as git sees it (git is not installed)")
+        return 0
+    fails = 0
+    for name, extra, want in (("an ignored tree is skipped", {"gen/x.py": "# used to a\n"}, 0),
+                              ("an untracked file that is not ignored is scanned", {"src/b.py": "# used to a\n"}, 1)):
+        with tempfile.TemporaryDirectory(prefix="comment-scan-git-") as d:
+            files = {".gitignore": "gen/\n", "src/a.py": "x = 1\n", **extra}
+            for p, text in files.items():
+                os.makedirs(os.path.dirname(os.path.join(d, p)) or d, exist_ok=True)
+                with open(os.path.join(d, p), "w", encoding="utf-8") as fh:
+                    fh.write(text)
+            if subprocess.run(["git", "init", "-q", d], capture_output=True).returncode != 0:
+                print("  skip a git work tree is scanned as git sees it (git init failed)")
+                return fails
+            r = subprocess.run([sys.executable, "-I", os.path.abspath(__file__), "history", "--root", d],
+                               capture_output=True, text=True)
+        ok = r.returncode == want
+        fails += not ok
+        print(f"  {'ok  ' if ok else 'FAIL'} git: {name} (rc {r.returncode}, want {want})")
     return fails
 
 
@@ -631,6 +989,18 @@ def self_test_refs():
         ("--word issue: a three-digit number far above is data", {**tracker, "docs/backlog/100-big.md": "z", "src/a.py": "# a ceiling of issue 450 or so\n"}, [], 0, ["--word", "issue"]),
         ("--word issue: a real id passes", {**tracker, "src/a.py": "# issue #12 and issue #7\n"}, [], 0, ["--word", "issue"]),
         ("missing tracker directory is bad usage", {"src/a.py": "# backlog 1\n"}, [], 2),
+        ("a leading ./ is checked: dead", {**tracker, "src/a.sh": "# see ./scripts/gone.sh\n"}, [], 1),
+        ("a leading ./ is checked: alive", {**tracker, "src/a.sh": "# see ./scripts/real.sh\n"}, [], 0),
+        ("`../x` is not a repository path", {**tracker, "src/a.sh": "# see ../scripts/gone.sh\n"}, [], 0),
+        ("a dead root-level file is checked", {**tracker, "src/a.py": "# the list lives in BACKLOG.md\n"}, [], 1),
+        ("a live root-level file passes", {**tracker, "README.md": "r\n", "src/a.py": "# see README.md.\n"}, [], 0),
+        ("a bare upper-case name found elsewhere in the tree passes", {**tracker, "src/NOTES.md": "n\n", "src/a.py": "# see NOTES.md\n"}, [], 0),
+        ("`./file` names the root: dead", {**tracker, "src/a.py": "# keep in sync with ./Cargo.toml\n"}, [], 1),
+        ("`./file` names the root: alive", {**tracker, "Cargo.toml": "c\n", "src/a.py": "# keep in sync with ./Cargo.toml\n"}, [], 0),
+        ("a bare lower-case name is an example, not a citation", {**tracker, "src/a.py": "# e.g. Cargo.toml or utils.py\n"}, [], 0),
+        ("`backlog 12 and 3 others` is a count, not a list of ids", {**tracker, "src/a.py": "# backlog 12 and 3 others\n"}, [], 0),
+        ("a list still stops at a real dead id", {**tracker, "src/a.py": "# backlog 12 and 98, 3 others\n"}, [], 1),
+        ("an ignored directory's files are not scanned (name)", {**tracker, "venv/lib/x.py": "# backlog 99\n"}, [], 0),
     ]
     fails += _run_cases("refs", "refs", refs)
     return fails

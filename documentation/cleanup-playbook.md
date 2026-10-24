@@ -6,15 +6,10 @@ Use it once, then let the checks keep the repository clean. Every step ends with
 that cannot be verified is a rewrite.
 
 **Before you start.** You need `git` (the playbook uses `git ls-files`, `git grep` and `git mv`), `sh`, `awk` and Python 3.8
-or newer (the documentation scripts use only the standard library; they are tested on 3.8 to 3.13). Words used here, defined once:
-
-| Word | Meaning |
-|---|---|
-| **owner** | The person who decides what is deleted, kept or shipped: a maintainer, a team lead, or on a solo project, you. |
-| **helper** | A person or an agent who does one piece of the cleanup. A cleanup is split into **work streams**: pieces with disjoint sets of files, each handed to one helper. |
-| **check**, **gate**, **runner** | A check is one script that fails when a rule is broken. A gate is one line of the runner's list (a check, or a plain command). The runner is the one command that runs every gate. See [`gate-runner.md`](./gate-runner.md). |
-| **baseline**, **ratchet** | A baseline is a committed file recording the violations that exist today; a ratchet is a check that accepts exactly that and lets it only shrink ([`ratchets.md`](./ratchets.md)). |
-| **entry file** | The short file an agent or a new contributor reads first (`AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING.md`). |
+or newer (standard library only; the tested versions are in [the prerequisites](./README.md#prerequisites)). The words
+**owner**, **helper** (a person or an agent who does one piece of the cleanup, which is split into **work streams**: pieces
+with disjoint sets of files, each handed to one helper), **check**, **gate**, **runner**, **baseline**, **ratchet** and
+**entry file** are defined once, in [the guide's word list](./README.md#words-used-in-this-guide).
 
 ## Contents
 
@@ -53,8 +48,8 @@ Record a baseline before any change. It is what the cleanup is judged against, a
 git ls-files '*.md' | xargs wc -c | sort -n | tail -30                  # the biggest docs
 git ls-files '*.md' | wc -l                                              # how many docs
 git ls-files '*.md' | xargs cat | wc -c                                  # total bytes of docs
-sh scripts/check-history-comments.sh --inventory 2>&1 | tail -1          # history lines in code (after step 1)
-sh scripts/check-comment-refs.sh --inventory 2>&1 | tail -1              # dead citations in code (after step 1)
+sh scripts/check-history-comments.sh --inventory 2>&1 >/dev/null | tail -1  # history lines in code (after step 1)
+sh scripts/check-comment-refs.sh --inventory 2>&1 >/dev/null | tail -1      # dead citations in code (after step 1)
 ```
 
 Write the numbers into the tracker item that owns the cleanup. The same commands run at the end show the change.
@@ -88,8 +83,7 @@ every citation the moves break.
 4. Commit: "chore: add the history, reference and link checks with baselines".
 
 **Verify:** the runner is green (`sh scripts/run-gates.sh`, exit 0, `ALL GREEN`). Plant a violation (`# used to be 3` in a source file) and see it go red. Remove it.
-See [`ratchets.md`](./ratchets.md).4. Commit: "chore: add the history, reference and link checks with baselines".
-
+See [`ratchets.md`](./ratchets.md).
 
 ## Step 2: inventory the docs
 
@@ -131,7 +125,7 @@ what each directory holds, so later helpers do not reopen it.
 
 ## Step 4: move and archive
 
-One commit per group of related moves (carousel research, finished rounds, one-off scripts).
+One commit per group of related moves (a series of research notes, finished rounds, one-off scripts).
 
 For each group:
 
@@ -171,7 +165,7 @@ The entry file is usually where the most history and the most copies sit, and it
 current state are hidden. This step pulls those three things apart, each to its home.
 
 1. **Harvest the decisions.** Read the entry file and the old docs for sentences that are standing decisions: "we do not ship an
-   editor", "CI stays off until the tracker is empty", "never delete a branch without asking". Write each as one line of
+   editor", "deploys are manual until the owner says otherwise", "never delete a branch without asking". Write each as one line of
    `docs/decisions.md` ([`../templates/decisions.md`](../templates/decisions.md)): the decision in present tense, its date if
    known, and a link to the item or doc that carries the reasoning (create the item if there is none). A decision that was
    reversed does not go in; it stays in its item. Then delete the sentence from where you found it, or replace it with
