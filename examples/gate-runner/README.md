@@ -7,7 +7,7 @@
 
 | File | What it is |
 |---|---|
-| [`run-gates.sh`](./run-gates.sh) | The runner. Reads `gates.list` beside it, runs every gate, exits 0 only for a full green run (`ALL GREEN`), 1 for a red gate, 2 for bad usage or a `scripts/check-*.sh` missing from the list, 3 for a green but partial run. Has `--only`, `--skip`, `--fast`, `--stop-on-fail`, `--no-reuse`, `--list` and `--self-test`. |
+| [`run-gates.sh`](./run-gates.sh) | The runner. Reads `gates.list` beside it, runs every gate, exits 0 only for a full green run (`ALL GREEN`), 1 for a red gate, 2 for bad usage or a `scripts/check-*.sh` missing from the list, 3 for a green but partial run (`--only`, `--skip`, `--fast`; `--stop-on-fail` exits 1 at a red gate). Has `--only`, `--skip`, `--fast`, `--stop-on-fail`, `--no-reuse`, `--check-reuse`, `--list` and `--self-test`. Tags: `slow`, `reuse` (whole tree), `path-only:GLOBS`, `reuse:PATHS`, `fail-on:REGEX`. |
 | [`gates.list`](./gates.list) | A starting list: the documentation half's eight checks. Yours also holds the security half's checks, your own, and plain commands. |
 
 ```sh
