@@ -30,6 +30,7 @@ Why this matters:
 - [Day to day](#day-to-day)
 - [Limits of a line check](#limits-of-a-line-check)
 - [Cold reads: a scanner cannot certify zero](#cold-reads-a-scanner-cannot-certify-zero)
+  - [Where late history concentrates](#where-late-history-concentrates)
 - [The page for your repository](#the-page-for-your-repository)
 
 ## The three moves
@@ -158,7 +159,10 @@ A comment line is history when it tells how the code changed instead of what it 
 | "We" did something | `we switched to a map`, `we moved it`, `originally written as a loop` | A story told by its author. |
 | A narrative TODO | `TODO: tidy this up after the rewrite` | A TODO tied to an event instead of an item. Write `TODO(backlog 12)`. |
 | Who found it | `lane 4`, `round 2`, `an earlier session`, `the agent found a race` | Names the work stream that did the change. The item names it, and the stream is gone. |
-| Evidence narration | `confirmed live`, `measured before the fix`, `the report showed` | How somebody came to know. The comment states the fact, the item holds the evidence. |
+| Evidence narration | `confirmed live`, `measured before the fix`, `the report showed`, `the audit measured`, `seen under load`, `reproduced the identical failure`, `20/20 clean runs against 20/20 failures` | How somebody came to know. The comment states the fact, the item holds the evidence. |
+| A tuning trial | `0.12 gave 4.48:1`, `a 6px inset clipped` | The value that was tried and what it did. The comment states the value in force and why. |
+| A gate's adoption story | `the sites known to exist when the gate was adopted` | How the rule came to be. The rule says what it enforces, and the item holds the day it landed. |
+| A change stamp | `NARROWED`, `TIGHTENED`, `REWRITTEN` in a header | An upper-case word that records an edit. The header says what the section is. |
 | A contrast without "before" | `as before`, `always was`, `unchanged from`, `it replaces the old index` | Defines the code against a state the reader never saw. |
 | A scratch path | `/tmp/sweep.txt`, `scratch/notes` | A file of whoever did the work, gone with their session. |
 
@@ -170,6 +174,9 @@ Not history, and not flagged:
 - A runtime event with a named actor or data structure: `a value that was changed by the caller`, `the field was removed
   from the payload by the server`. The same verb about the code (`this was renamed`) is history. So is a condition
   (`freed once it is no longer referenced`), where `no longer` states what must hold and tells no story.
+- A reason that names a condition, and a present fact about an input: `flaky under load, so the wait polls` gives the
+  cause of a choice, and `an input of 0.07 gives hue 221` states what the code computes. Neither tells how anyone learned it.
+- An id with a part number: `row 84 finding 2` cites an item and one of its parts. It is not a count of runs.
 - A colour or a hex literal that looks like a hash: `#abc1234`, `0xdeadbeef`.
 - A word inside a file path: `docs/old-name.md`, `archive/2025-03-02-notes.md`. The scanner masks a path before it matches
   (two slashes or more, or one slash and an extension), so a citation of a file never counts as the file's story. A slash
@@ -226,6 +233,10 @@ person or an agent) who was never told the rule. One sentence in two places is c
   change says nothing about comments. Paste the order in verbatim: "Code describes only its current state. The story of a
   change goes straight into the tracker item's status or detail, or the archive, linked by id. It is never retold in a
   comment, a test name or a string."
+
+A brief alone does not stop it. In the cleanup behind this guide the standing order was in every brief, and helpers still wrote
+fresh history into rationale prose ([where late history sits](#where-late-history-concentrates)). The order lowers the rate. Reading
+what each batch added is what finds the rest.
 
 The order names where the story goes. "Do not write history" leaves a writer holding a fact with no place to put it. The item
 is the place, so the writer has a better move than skipping the fact.
@@ -285,10 +296,27 @@ the next read finds less. Shapes that a first scanner usually misses:
 - Work-stream words: `lane 4`, `round 2`, `an earlier session`, `the agent found`.
 - Evidence narration: `confirmed live`, `measured before the fix`, `the report showed`.
 - Scratch-file paths: `/tmp/sweep.txt`, `scratch/notes`.
+- Evidence in rationale prose: `the audit measured`, `seen under load`, `reproduced the identical failure`, `20/20 clean runs`.
+- Gate-adoption stories: `known to exist when the gate was adopted`.
+- Tuning trials in the past tense: `0.12 gave 4.48:1`.
+- Upper-case change stamps: `NARROWED`.
 - A before and after contrast with no "before" in it: `as before`, `always was`, `unchanged`, `it replaces`. In a test name,
   `still` is the same contrast: `still renders the header`.
 
-Each new pattern needs the false-positive rules that keep the gate trusted, or people start marking lines to get past it:
+Each new pattern needs the false-positive rules that keep the gate trusted, or people start marking lines to get past it. The
+rule for the self-test is a pair: a sentence that must be flagged and a close sentence that must not.
+
+| Must flag | Must not flag |
+|---|---|
+| `the audit measured 40 ms per frame` | `takes 40 ms on the reference machine` |
+| `seen under load on a slow runner` | `flaky under load, so the wait polls` |
+| `0.12 gave 4.48:1` | `an input of 0.07 gives hue 221` |
+| `20/20 clean runs against 5/5 failures` | `shows 3/4 of the columns` |
+| `known to exist when the gate was adopted` | `listed when the gate is adopted by a project` |
+| `NARROWED: only the first match` | `the caller MUST NOT retry` |
+| (none) | `see row 84 finding 2` |
+
+Past tense and a narrator mark the story. A present-tense fact or a cause does not.
 
 - **Mask file paths before matching.** A citation of `docs/old-name.md` is not a story.
 - **Exempt pinned upstream revisions.** `ported from lib/x.py @ 7e4034b` is provenance.
@@ -301,8 +329,8 @@ When the scanner learns a form, its count rises on code that was green a moment 
 nothing else in that commit. Then the count shrinks again as the sweep runs. A baseline that grows without that flag and
 that sentence is a baseline nobody is reading.
 
-[`comment_scan.py`](../examples/documentation/comment_scan.py) carries the work-stream, evidence, contrast and scratch-path
-patterns and the path masking above, each with self-test cases. Its month-name dates, `used to` and `no longer` rules
+[`comment_scan.py`](../examples/documentation/comment_scan.py) carries the work-stream, evidence, adoption, trial, change-stamp,
+contrast and scratch-path patterns and the path masking above, each with self-test cases, the pairs of the table among them. Its month-name dates, `used to` and `no longer` rules
 include the instrument and condition exceptions.
 
 ## Text that is not a comment
@@ -370,16 +398,44 @@ A worked example, a repository of about 200,000 lines: the scanner count went 55
 comment lines. A second full read found 6 to 29 per 1,000 in each area of the code, and about 77 per 1,000 in end-to-end test
 files, where narration of the bug that prompted the test is the habit.
 
+Then the reads repeated, each on a fresh sample drawn with a new random seed, and each round's findings became scanner rules with
+their must-flag and must-not-flag sentences. The rate fell with the rules: about 21, then 3, then 2.2 retelling lines per 1,000
+comment lines. Each read found less because the one before had taught the scanner what it found.
+
 The loop:
 
 1. Pick a sample, by directory, and read all of its comments. Do not read only the ones near a match.
 2. Fix each finding by the [three moves](#the-three-moves).
 3. Every finding that fits a pattern becomes a scanner rule plus a self-test case ([above](#teaching-the-scanner-a-new-shape)).
    A finding that fits none is fixed and left.
-4. Read a fresh sample. Stop when a cold read of a sample nobody has read finds about none. The rate per 1,000 comment lines
+4. Read a fresh sample, drawn with a new seed each time, so no sample is read twice by luck. The rate per 1,000 comment lines
    is the number to watch, because it does not depend on how large the sample is.
+5. Also read every comment line the latest batch added ([below](#where-late-history-concentrates)), in full. It is the
+   place the next findings are.
+
+**The stopping rule.** Stop when a fresh-seed sample finds about none, and the lines the latest batch added hold none. Both
+halves are needed: a sample can miss a small area, and a batch can be clean in a sample and dirty in the part nobody drew.
 
 The reads are for people or agents with fresh context: a reader who wrote the rewrite reads what the rewrite meant.
+
+### Where late history concentrates
+
+After the sweeps, the hits that remained were not in the old code. They sat in **rationale prose**: the header of a spec or
+test file, the "why this gate exists" header of a check script, and the comment block above a section of a theme or a
+configuration file. Helpers wrote them fresh, in the batches that cleaned everything else, with the standing order in their
+brief. The prose answers "why does this exist", and the quickest answer is how it came to exist. Four forms:
+
+- **Evidence narration:** `the audit measured`, `seen under load`, `reproduced the identical failure`, `20/20 clean runs against
+  20/20 failures`. The reason is "flaky under load" or "takes 40 ms"; the runs belong in the item.
+- **Gate-adoption stories:** `the sites known to exist when the gate was adopted`. State the rule, and let the item hold the day.
+- **Tuning trials:** `0.12 gave 4.48:1`. State the value in force and the constraint that picked it.
+- **Upper-case header words:** `NARROWED`, `TIGHTENED`. A header says what the section is now.
+
+A brief alone does not stop these, so the cold read changes shape: **scan every batch's added comment lines**, all of them, not a
+sample, because a batch of helper output is where new history enters. In git that is the added lines of the batch's diff,
+filtered to comment lines by the same extractor, run through the pattern table, and then read by a person for what the table
+cannot see. Teach the scanner each form it finds, with a must-not-flag partner ([the table above](#teaching-the-scanner-a-new-shape)),
+so the next batch is checked by the rule and not by luck.
 
 ## The page for your repository
 

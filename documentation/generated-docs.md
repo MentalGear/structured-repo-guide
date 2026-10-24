@@ -17,6 +17,7 @@ in the source.
 - [Two halves, one catalogue](#two-halves-one-catalogue)
 - [The freshness check](#the-freshness-check)
 - [Keeping the runner and the catalogue complete](#keeping-the-runner-and-the-catalogue-complete)
+- [Generated files and parallel merges](#generated-files-and-parallel-merges)
 - [Adding a new check](#adding-a-new-check)
 - [Pitfalls](#pitfalls)
 - [Other things to generate](#other-things-to-generate)
@@ -178,6 +179,48 @@ that true by construction:
 
 In both, the catalogue's text comes from the script header, so no prose is kept anywhere else.
 
+## Generated files and parallel merges
+
+A generated file that every change touches conflicts on every parallel merge. The catalogue above avoids it, because each change
+adds its own script and its own line. Two generated files do not: the tracker index (each work stream adds or edits an item, so
+each rewrites a row and the counts) and a measured-durations table (each stream adds its own entry and the total). Eight streams
+merging into one integration branch conflict eight times, in a file nobody edits by hand, and the resolution is "regenerate",
+done by whoever is in a hurry.
+
+Make the merge itself do it, by construction, with a **git merge driver**:
+
+1. **Declare it in a committed `.gitattributes`:** `docs/backlog.md merge=tracker-index` and
+   `docs/durations.json merge=durations` (your paths, your names). The attribute travels with the branch.
+2. **Commit the driver programs** in the repository (`scripts/merge-tracker-index.py`, `scripts/merge-durations.py`), so the
+   rule and the code that applies it are reviewed and versioned together.
+3. **Register them idempotently in the session-setup hook** that every clone and every worktree runs: `git config
+   merge.tracker-index.driver 'sh scripts/merge-driver.sh index %O %A %B %P'`, and the same for each name. A driver is a
+   setting of the local repository, not a file in it, so a fresh clone has none until the hook sets it, and running the hook
+   twice changes nothing.
+4. **Fall back to the plain text merge when the script is absent.** An old branch has the attribute but not the script. The
+   wrapper then runs `git merge-file -p` on the three versions, which is the merge that would have run without a driver, and
+   the result is an ordinary conflict, not a crashed merge.
+5. **Check the wiring.** A gate confirms that the attributes, the driver scripts and the hook's registration lines exist, and
+   that a scratch two-branch merge in a throwaway repository, each branch changing the generated file differently, succeeds
+   with the drivers registered and conflicts without them. The second half is the proof the drivers are what makes it pass.
+
+What a driver can and cannot assume:
+
+- **It runs before the other side's files are in the working tree.** There is no `MERGE_HEAD` to read and the other branch's
+  item files are not checked out, so the driver may use only the three versions of its own file git hands it (base, ours,
+  theirs). A driver that regenerates from the item files would read the wrong tree.
+- **It is a merge, not a regeneration.** The freshness check still compares the result with the files it summarizes, so a
+  driver that merges wrongly is caught by the check that already exists, and a driver that is skipped on a machine produces the
+  conflict instead of a wrong file.
+- **Sort keys by code point, not by locale.** A locale-aware sort orders accented and mixed-case keys by the machine's ICU data,
+  so two machines write different bytes for the same rows, and the freshness check goes red on one of them. Sort the raw
+  strings.
+
+The tracker index's driver is described under [`tracker-as-files.md`](./tracker-as-files.md#merging-the-index-in-parallel-work).
+The durations table's driver is the same idea with the entry as the row and the total recomputed. This guide describes the drivers
+and has no sample of them: a driver depends on the shape of your generated file, and a sample would be one more thing to keep in
+step with it.
+
 ## Adding a new check
 
 1. Write `scripts/check-thing.sh`. Its header's first paragraph says what it forbids and why. (Glob mode: give it a `group:` line.)
@@ -190,6 +233,8 @@ file held a copy ([`principles.md`](./principles.md#2-one-home-per-rule)).
 
 ## Pitfalls
 
+- **A generated file that merges badly.** The page is right and every parallel branch conflicts in it. Declare a merge driver
+  ([above](#generated-files-and-parallel-merges)) instead of teaching people to resolve it by hand.
 - **Non-deterministic output.** A timestamp, a "N checks" count computed at write time that differs from the check's
   count, a dict order. The freshness check then fails on a clean tree. Generate only what is derived, and sort.
 - **Platform differences.** Normalise path separators to `/` and read files as UTF-8. A page generated on one machine

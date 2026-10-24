@@ -216,7 +216,10 @@ Do this last among the large steps, because the moves above fix many dead citati
    the commit), then shrink it again with the sweep ([teaching the scanner](./history-in-comments.md#teaching-the-scanner-a-new-shape)).
 8. **After the scanner reads zero, schedule cold reads.** A scanner cannot certify zero: a reviewer reads every comment of a
    sample by meaning ([cold reads](./history-in-comments.md#cold-reads-a-scanner-cannot-certify-zero)). Each finding that fits
-   a pattern becomes a scanner rule with a self-test case. Stop when a cold read of a fresh sample finds about none.
+   a pattern becomes a scanner rule with a self-test case, a sentence to flag and a close one not to flag. Draw each sample with
+   a new seed, and also read every comment line the latest batch added: late history sits in rationale prose that helpers wrote
+   fresh. Stop when a fresh-seed sample finds about none and the lines of the latest batch hold none (the rate fell from about 21
+   to 3 to 2.2 per 1,000 comment lines over three reads in the worked example).
 9. **Cover the text that is not a comment:** comments in embedded strings and HTML, and names (test titles, test function
    names, test file names), the last under a zero-tolerance gate with no baseline
    ([text that is not a comment](./history-in-comments.md#text-that-is-not-a-comment)).
@@ -292,5 +295,9 @@ stream owns and may not touch.
 - **Delegate a comment sweep by disjoint comment trees:** one stream per set of directories, so no two edit the same file.
 - **Keep exactly one owner for the scanner and its baseline.** Streams read the inventory and fix lines. Only the owner changes
   a pattern or runs `--update-baseline`, once per batch on the merged tree, so streams never fight over the baseline file.
+- **Generated files need a merge driver before the first parallel batch.** When several streams each add a tracker item or a
+  measured entry, the generated index and the generated table conflict on every merge. Declare a git merge driver for each in a
+  committed `.gitattributes` and register it from the session-setup hook, so no stream or merge owner resolves them by hand
+  ([`generated-docs.md`](./generated-docs.md#generated-files-and-parallel-merges)).
 - **Every brief carries the standing order** about history, verbatim, and every comment-only stream ends with a parse check
   ([Step 7](#step-7-sweep-the-comments)). A brief that omits either gets a stream that adds the debt it is asked to remove.

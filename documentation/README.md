@@ -45,9 +45,9 @@ runner, and keep every rule in the repository.
 |---|---|
 | [`principles.md`](./principles.md) | The nine rules everything else applies. Start here. |
 | [`layout.md`](./layout.md) | The target docs tree, what goes in each directory, how to keep cited paths and headings stable. |
-| [`history-in-comments.md`](./history-in-comments.md) | The archive / link / fold rule for comments, with before and after in six languages, what counts as history, markers for exceptions, prevention in the entry file and in every brief, teaching the scanner new shapes, text that is not a comment, and cold reads. |
-| [`tracker-as-files.md`](./tracker-as-files.md) | The backlog as one file per item, with front matter, ids that comments cite, and generated open and done indexes. |
-| [`generated-docs.md`](./generated-docs.md) | Generating a checks catalogue from the gate list and the script headers, with a freshness check. The same shape for any generated page. |
+| [`history-in-comments.md`](./history-in-comments.md) | The archive / link / fold rule for comments, with before and after in six languages, what counts as history, markers for exceptions, prevention in the entry file and in every brief, teaching the scanner new shapes, text that is not a comment, and cold reads (convergence, the stopping rule, where late history concentrates). |
+| [`tracker-as-files.md`](./tracker-as-files.md) | The backlog as one file per item, with front matter, ids that comments cite, generated open and done indexes, and a merge driver for the index in parallel work. |
+| [`generated-docs.md`](./generated-docs.md) | Generating a checks catalogue from the gate list and the script headers, with a freshness check. The same shape for any generated page, and merge drivers for generated files that conflict on every parallel merge. |
 | [`ratchets.md`](./ratchets.md) | Shrink-only baselines: how a strict check lands in a codebase that already violates it, and how a check proves it can fail. |
 | [`gate-runner.md`](./gate-runner.md) | The one runner and the one gate list: exit codes, the guard that no check is left out, reuse, and making the full run affordable. |
 | [`cleanup-playbook.md`](./cleanup-playbook.md) | A one-time cleanup of a repository full of historical docs and comments, step by step, with verification. |

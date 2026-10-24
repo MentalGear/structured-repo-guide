@@ -425,6 +425,22 @@ PHRASES = [
                 r"manually|by hand)\b", re.I), "evidence"),
     (re.compile(r"\bmeasured (?:before|after)\b", re.I), "evidence"),
     (re.compile(r"\bthe (?:report|review|audit|trace|profile) (?:showed|found|said|revealed|flagged)\b", re.I), "evidence"),
+    # Evidence narration in the rationale prose (test headers, script headers, config sections): a trial, a run count, a
+    # failure seen somewhere. A reason ("flaky under load") and a present fact ("an input of 0.07 gives hue 221") stay.
+    (re.compile(r"\bthe (?:audit|sweep|benchmark|experiment|investigation|test run|run) "
+                r"(?:measured|reproduced|confirmed|observed|recorded|counted)\b", re.I), "evidence"),
+    (re.compile(r"\b(?:seen|observed|reproduced|hit|found) (?:under load|in (?:ci|production|the field)|on (?:ci|a device))\b",
+                re.I), "evidence"),
+    (re.compile(r"\breproduced the (?:identical|same|exact) (?:failure|error|crash|result)\b", re.I), "evidence"),
+    (re.compile(r"\b\d+/\d+ (?:clean |green |passing |failing )?(?:runs?|passes|failures?)\b", re.I), "evidence"),
+    # How a gate came to be: the adoption day is history, the rule it enforces is not.
+    (re.compile(r"\b(?:when|once|at the time) (?:the|this) (?:gate|check|ratchet|rule|baseline|scanner|lint) "
+                r"(?:was|were) (?:adopted|introduced|added|written|installed|enabled|turned on)\b", re.I), "adoption"),
+    # A tuning trial: the value that was tried and what it gave, in the past tense.
+    (re.compile(r"\b\d[\d.]* (?:gave|yielded|produced|scored|failed|clipped|overflowed)\b"), "trial"),
+    # An upper-case word in a header that records an edit instead of describing the section.
+    (re.compile(r"\b(?:NARROWED|WIDENED|TIGHTENED|LOOSENED|RELAXED|RAISED|LOWERED|REPLACED|DROPPED|REWRITTEN)\b"),
+     "change stamp"),
     # A contrast with the state before, without the word "before".
     (re.compile(r"\b(?:as before|always was|same as (?:before|earlier)|unchanged (?:from|since|after))\b", re.I),
      "contrast"),
@@ -939,6 +955,20 @@ def self_test_history():
         ("evidence: confirmed live", {"src/a.ts": "// confirmed live on the staging cluster\n"}, [], 1),
         ("evidence: measured before", {"src/a.ts": "// 40 ms, measured before the cache\n"}, [], 1),
         ("evidence: the report showed", {"src/a.ts": "// the profile showed a long task\n"}, [], 1),
+        # lessons of late cold reads: rationale prose written fresh by helpers
+        ("evidence: the audit measured", {"src/a.ts": "// the audit measured 40 ms per frame\n"}, [], 1),
+        ("evidence: seen under load", {"src/a.ts": "// seen under load on a slow runner\n"}, [], 1),
+        ("evidence: reproduced the identical failure", {"src/a.ts": "// reproduced the identical failure twice\n"}, [], 1),
+        ("evidence: N/N clean runs", {"src/a.ts": "// 20/20 clean runs against 5/5 failures without it\n"}, [], 1),
+        ("a reason about load is not history", {"src/a.ts": "// flaky under load, so the wait polls instead of sleeping\n"}, [], 0),
+        ("a fraction that is not a run count passes", {"src/a.ts": "// shows 3/4 of the columns; runs 4 workers\n"}, [], 0),
+        ("adoption: when the gate was adopted", {"src/a.sh": "# the sites known to exist when the gate was adopted\n"}, [], 1),
+        ("a gate described in the present tense passes", {"src/a.sh": "# a site is listed when the gate is adopted by a project\n"}, [], 0),
+        ("trial: 0.12 gave 4.48:1", {"src/a.css": "/* 0.12 gave 4.48:1, so the mix is 0.14 */\n"}, [], 1),
+        ("a present fact about an input passes", {"src/a.css": "/* an input of 0.07 gives hue 221 */\n"}, [], 0),
+        ("change stamp: an upper-case NARROWED", {"src/a.py": "# NARROWED: only the first match\n"}, [], 1),
+        ("upper-case requirements pass", {"src/a.py": "# the caller MUST NOT retry; a NARROW range is allowed\n"}, [], 0),
+        ("an id with a finding number passes", {"src/a.py": "# see row 84 finding 2\n"}, [], 0),
         ("a measurement stated as a fact is not history", {"src/a.ts": "// takes 40 ms on the reference machine\n"}, [], 0),
         ("contrast: as before", {"src/a.go": "// returns the same slice as before\nfunc a() {}\n"}, [], 1),
         ("contrast: it replaces the old", {"src/a.go": "// it replaces the old index\nfunc a() {}\n"}, [], 1),

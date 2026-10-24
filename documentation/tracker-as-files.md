@@ -16,6 +16,7 @@ closed it, checks can read it offline, and an agent can edit it with the same to
 - [Ids](#ids)
 - [Open and done](#open-and-done)
 - [The generated index](#the-generated-index)
+- [Merging the index in parallel work](#merging-the-index-in-parallel-work)
 - [Citing an item from code](#citing-an-item-from-code)
 - [Linking research to items](#linking-research-to-items)
 - [Creating the first item](#creating-the-first-item)
@@ -127,6 +128,29 @@ Each index file has a hand-written header, then a block between two markers, whi
   regeneration.
 - A reader who knows an id and not the file name looks in the index. A script can glob `docs/backlog/*NNN-*` and
   `docs/backlog/done/*NNN-*`.
+
+## Merging the index in parallel work
+
+Work streams that each add or change an item all rewrite the same generated rows and the same counts, so the index conflicts on
+every merge into the integration branch, though no stream edited it by hand. Declare a git merge driver for the index, as
+[`generated-docs.md`](./generated-docs.md#generated-files-and-parallel-merges) sets out (committed `.gitattributes`, committed
+driver, registration in the session-setup hook, a fallback to `git merge-file`, a gate with a scratch merge). The index driver
+has these parts:
+
+- **Input: the three versions of the index** (base, ours, theirs). It runs before the other side's item files exist in the
+  working tree and there is no `MERGE_HEAD`, so it cannot regenerate from the items.
+- **Rows merge by id.** A row only one side changed takes that side. A row both sides changed to the same text takes it. A row
+  both sides changed differently is a conflict, and the driver exits non-zero. A row added on either side stays, and a row
+  removed on one side and unchanged on the other is removed.
+- **Counts are recomputed** from the merged rows (the open count, the done count), never merged as numbers, because two sides that
+  each added one item hold the same count.
+- **Text outside the generated block merges with `git merge-file`.** The hand-written header is an ordinary text merge, so a real
+  conflict in the header stays a conflict.
+- **Rows sort by code point,** so the output is the bytes the generator writes on any machine.
+
+The freshness check ([`backlog_index.py --check`](#what-the-checks-enforce)) stays the judge: it compares the merged index with the
+item files, so a driver that merges to the wrong table goes red there, and the fix is to run `--write`. The guide describes this
+driver and has no sample of it.
 
 ## Citing an item from code
 
