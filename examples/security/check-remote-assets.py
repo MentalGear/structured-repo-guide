@@ -6,11 +6,19 @@ runtime sends every visitor's request to that party, lets that party change what
 runs or shows, and makes the page depend on someone else being up. Bundle the file or inline
 it instead. This check scans web sources for remote loads. No network, Python 3 standard library.
 
-Flags, in .html .htm .css .svg .js .mjs .ts .tsx .jsx .vue and .svelte files under the roots:
+Flags, in .html .htm .css .svg .js .mjs .ts .tsx .jsx .vue and .svelte files under the roots
+(a tag or an `image-set(...)` may span lines):
   - an `src`, `srcset` or `poster` attribute whose value is `http(s)://` or `//host`;
   - a `<link ... href=remote>` (stylesheet, preload, icon, preconnect: all contact the host);
-  - a CSS `url(remote)` or `@import` of a remote URL.
+  - an `href` or `xlink:href` on the SVG elements that load what they name (`<image>`, `<use>`,
+    `<feImage>`, `<script>`), and a `<object data=remote>`;
+  - a CSS `url(remote)`, an `@import` of a remote URL, and a string inside `image-set(...)`;
+  - a module import of a remote URL: `import x from "https://..."`, `import "https://..."`,
+    `import("https://...")`, `export ... from "https://..."`.
 Not flagged: `data:` URIs, relative paths, ordinary `<a href>` links, XML namespaces.
+Not checked (extend this file, or add a Content-Security-Policy and test that): a URL that a
+script builds at runtime or passes to `fetch`, `XMLHttpRequest`, `WebSocket`, `EventSource`,
+`new Worker`, `importScripts` or `new URL`; `<meta http-equiv="refresh">`.
 
 Allowlist (`--allow FILE`), one entry per line, `#` starts a comment line:
       file-path-suffix|exact-url|reason
@@ -32,9 +40,15 @@ URL = r"(?:https?:)?//[^\s\"')>]+"
 PATTERNS = [
     re.compile(r"""\b(?:src|srcset|poster)\s*=\s*["']?(""" + URL + ")", re.I),
     re.compile(r"""<link\b[^>]*?\bhref\s*=\s*["']?(""" + URL + ")", re.I),
+    re.compile(r"""<(?:image|use|feImage|script)\b[^>]*?\b(?:xlink:)?href\s*=\s*["']?(""" + URL + ")", re.I),
+    re.compile(r"""<object\b[^>]*?\bdata\s*=\s*["']?(""" + URL + ")", re.I),
     re.compile(r"""\burl\(\s*["']?(""" + URL + ")", re.I),
     re.compile(r"""@import\s+["']?(""" + URL + ")", re.I),
+    re.compile(r"""\bimport\s*\(?\s*["'](""" + URL + ")", re.I),
+    re.compile(r"""\bfrom\s*["'](""" + URL + ")", re.I),
 ]
+IMAGE_SET = re.compile(r"image-set\(([^)]*)\)", re.I)
+IMAGE_SET_STRING = re.compile(r"""["'](""" + URL + ")", re.I)
 
 
 def scan(roots):
@@ -50,11 +64,22 @@ def scan(roots):
                     text = open(path, encoding="utf-8").read()
                 except (OSError, UnicodeDecodeError):
                     continue
-                for n, line in enumerate(text.splitlines(), 1):
-                    for pat in PATTERNS:
-                        for m in pat.finditer(line):
-                            found.append((path.replace(os.sep, "/"), n, m.group(1)))
-    return found
+                path = path.replace(os.sep, "/")
+                seen = set()
+                hits = [m for pat in PATTERNS for m in pat.finditer(text)]
+                for body in IMAGE_SET.finditer(text):
+                    hits += [(body, m) for m in IMAGE_SET_STRING.finditer(body.group(1))]
+                for h in hits:
+                    if isinstance(h, tuple):
+                        body, m = h
+                        at, url = body.start(1) + m.start(1), m.group(1)
+                    else:
+                        at, url = h.start(1), h.group(1)
+                    n = text.count("\n", 0, at) + 1
+                    if (n, url) not in seen:
+                        seen.add((n, url))
+                        found.append((path, n, url))
+    return sorted(found)
 
 
 def run(roots, allow_path):
@@ -113,6 +138,19 @@ def self_test():
     case("remote stylesheet link", "remote load", {"web/index.html": '<link rel="stylesheet" href="https://fonts.example.com/css">'})
     case("remote font in CSS", "remote load", {"web/app.css": "@font-face { src: url('https://fonts.example.com/f.woff2'); }"})
     case("remote @import", "remote load", {"web/app.css": '@import "https://x.example.com/a.css";'})
+    case("SVG <image href>", "remote load", {"web/logo.svg": '<svg><image href="https://cdn.example.com/a.png"/></svg>'})
+    case("SVG <use xlink:href>", "remote load", {"web/logo.svg": '<svg><use xlink:href="https://cdn.example.com/s.svg#a"/></svg>'})
+    case("an <object data>", "remote load", {"web/index.html": '<object data="https://cdn.example.com/a.pdf"></object>'})
+    case("a CSS image-set string", "remote load",
+         {"web/app.css": 'a { background: image-set("local.png" 1x, "https://cdn.example.com/b@2x.png" 2x); }'})
+    case("a module import from a URL", "remote load", {"web/app.js": 'import confetti from "https://cdn.example.com/confetti.js";'})
+    case("a bare module import of a URL", "remote load", {"web/app.js": "import 'https://cdn.example.com/side-effect.js';"})
+    case("a dynamic import of a URL", "remote load", {"web/app.js": 'const m = await import("https://cdn.example.com/m.js");'})
+    case("a re-export from a URL", "remote load", {"web/app.js": "export { a } from 'https://cdn.example.com/a.js';"})
+    case("a <link> whose href is on the next line", "remote load",
+         {"web/index.html": '<link rel="stylesheet"\n      href="https://fonts.example.com/css">'})
+    case("an <a xlink:href> link and a local import are green", None,
+         {"web/logo.svg": '<svg><a xlink:href="https://example.com/docs"><text>docs</text></a></svg>', "web/app.js": 'import x from "./x.js";'})
     case("an allowlisted load is green", None, {"web/index.html": '<img src="https://slow.example.com/a.png">'},
          allow="index.html|https://slow.example.com/a.png|the demo shows a slow-loading image on purpose\n")
     case("an allowlist entry that matches nothing is stale", "stale entry", {"web/index.html": clean},

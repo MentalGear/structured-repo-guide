@@ -86,8 +86,10 @@ that mode. A Python library's `pyproject.toml` declares ranges on purpose: pass 
 
 **Verified by.** Shipped: [`check-pins.py`](../examples/security/check-pins.py) reads `package.json` (dependencies, dev and
 optional dependencies, `overrides`, `resolutions`, `pnpm.overrides`), `requirements*.txt`, `pyproject.toml`, `Cargo.toml`
-(dependency tables, `[patch.*]`, `[replace]`) and the `overrides:` of `pnpm-workspace.yaml`, and fails on every dependency that
-is not exact. `--require-setting FILE:KEY=VALUE` keeps a line such as `.npmrc:save-exact=true` from being removed. An
+(dependency tables, `[patch.*]`, `[replace]`) and the `overrides:` and `catalog`/`catalogs` mappings of `pnpm-workspace.yaml`
+(a `catalog:` reference in a `package.json` is followed to the nearest workspace file), and fails on every dependency that is
+not exact. A Cargo dependency that names `registry` or `registry-index` is red unless `--cargo-registry NAME` allows that one
+source. `--require-setting FILE:KEY=VALUE` keeps a line such as `.npmrc:save-exact=true` from being removed. An
 exception is a line `path|name|reason` in an allowlist; the reason is required and an entry that matches nothing fails.
 Its `--self-test` applies a mutation per rule (a caret, a tag, a git source, a missing `rev`, a `[patch]` on a branch, a range
 in an override, a pyproject range, a lowered release age, a stale allowlist entry) and requires each to turn it red.
@@ -270,9 +272,12 @@ usual cases. Bundle the file or inline it.
 exception only where the request itself is the point (a fixture that must demonstrate a failed load), with a reason.
 
 **Verified by.** Shipped: [`check-remote-assets.py`](../examples/security/check-remote-assets.py): it flags `src`, `srcset` and
-`poster` attributes, `<link href>`, CSS `url(...)` and `@import` that point at `http(s)://` or `//host`. The allowlist is
-`file-suffix|exact-url|reason`; a stale entry fails. It does not read `<script>` bodies for `fetch(...)` calls; if you load
-scripts at runtime, extend it or add a Content-Security-Policy and test that.
+`poster` attributes, `<link href>`, `href` and `xlink:href` on SVG `<image>`, `<use>`, `<feImage>` and `<script>`, `<object data>`,
+CSS `url(...)`, `@import` and strings in `image-set(...)`, and module imports (`import ... from`, `import "..."`,
+`import("...")`, `export ... from`) that point at `http(s)://` or `//host`. The allowlist is `file-suffix|exact-url|reason`; a
+stale entry fails. It does not follow a URL that a script builds at runtime or hands to `fetch`, `XMLHttpRequest`,
+`WebSocket`, `new Worker`, `importScripts` or `new URL`, and it does not read `<meta http-equiv="refresh">`; if you load
+resources that way, extend it or add a Content-Security-Policy and test that.
 
 ## C09 Registry and source URLs pinned
 
@@ -295,8 +300,12 @@ spelled three ways across a README, a manifest and a template drifts, and one of
 - **A dependency without its source.** Where the manifest format lets a dependency name its source explicitly, always do, and
   have a script reject an entry that does not, so a default can never fill the gap.
 
-**Verified by.** Shipped for the index and source rules above: `check-pins.py`. The comparison of every spelling of your URL is
-a pattern, because which spellings exist depends on your layout: parse, compare, fail, the same pattern as C14.
+**Verified by.** Shipped for the manifest side of the rules above: `check-pins.py` fails on a pip `--extra-index-url`,
+`--find-links` or `--trusted-host`, on an npm git or tarball dependency, on a Cargo git dependency without a `rev`, and on a
+Cargo dependency that names a registry other than the ones you pass with `--cargo-registry`. It does not read `.npmrc`'s
+`registry=` lines, `.cargo/config.toml`'s `[registries]` and `[source]`, or `pip.conf`, and it does not read transitive
+dependencies (C18). The comparison of every spelling of your URL and the config files above are patterns, because which
+spellings exist depends on your layout: parse, compare, fail, the same pattern as C14.
 
 ## C10 Dependency evaluation
 
@@ -330,9 +339,9 @@ parsers, the framework itself. The veto exempts them from lifting, not from the 
 
 | Dependency | Use (call sites) | Cost (packages, build scripts, proc-macros) | Code risk | Channel risk | Blast radius | Outcome |
 |---|---|---|---|---|---|---|
-| `date-lib` 0.3.47 | 204 call sites in 2 modules | +6 packages behind a feature; 1 proc-macro | `unsafe` in the local-offset code, parses no input | 1 maintainer for 6 packages | 2 of 83 components | keep, already feature-gated; trim the macros feature |
-| `markup-parser` =0.13.4 | 1 import | +4 packages, no build script | parses untrusted text | 3 maintainers | 1 component | keep, own component, exact pin (C07) |
-| `icon-set` =0.1.0 | 12 icons used | +1 package; a `build.rs` in every consumer build | build script runs on the consumer's machine | young, 1 human maintainer | 30 of 83 components | replace: lift the 12 SVGs |
+| `date-lib` 2.4.1 | 190 call sites in 2 modules | +5 packages behind a feature; 1 proc-macro | `unsafe` in the local-offset code, parses no input | 1 maintainer for 5 packages | 2 of 40 modules | keep, already feature-gated; trim the macros feature |
+| `markup-parser` =1.8.0 | 1 import | +4 packages, no build script | parses untrusted text | 3 maintainers | 1 module | keep, isolated in one module, exact pin (C07) |
+| `icon-set` =0.2.0 | 12 icons used | +1 package; a `build.rs` in every consumer build | build script runs on the consumer's machine | young, 1 human maintainer | 25 of 40 modules | replace: lift the 12 SVGs |
 
 These rows are illustrative, not data. Blast radius is how many of your packages or entry points pull the dependency in.
 
@@ -416,9 +425,14 @@ control unless it was chosen for that reason and is verified.
 
 **Verified by.** Shipped for GitHub Actions: [`check-workflow-permissions.py`](../examples/security/check-workflow-permissions.py)
 reads `.github/workflows/*.yml` and fails on a workflow with no `permissions:` at the top or in every job, a `write-all`, a
-write scope at the top level, a privileged trigger that checks out the head, and an action not pinned to 40 hex (with a
-`# pin-ok: <reason>` escape). Its `--self-test` plants each flaw. It reads the file, not the repository's own Actions
-setting, and it does not read other CI systems: for those, write the same four questions against their format.
+write scope at the top level (block or flow-style map), a privileged trigger that checks out the head (a `ref:` or
+`repository:` naming it, or a `run:` step that names it or fetches it by hand, such as `gh pr checkout` or `pull/<n>/head`),
+and an action not pinned to 40 hex (with a `# pin-ok: <reason>` escape). Its `--self-test` plants each flaw. It reads the
+file, not the repository's own Actions setting, and it does not read other CI systems: for those, write the same four
+questions against their format. It also does not follow a head that reaches a step through an indirection (an `env:` value or
+a step output that holds the head ref, a reusable workflow, a script that runs `git` itself, an artifact that a
+`workflow_run` workflow downloads); keep the privileged workflow free of steps that run proposed code at all, and treat the
+check as a net for the direct forms.
 
 ## C14 The controls table stays true
 
@@ -432,7 +446,7 @@ with a script. [`controls-table.md`](./controls-table.md) is the format and the 
 **Verified by.** Shipped: [`check-controls-table.py`](../examples/security/check-controls-table.py) in the gate list. It fails
 when an enforced or manual row names a path that does not exist, when a planned row's script already exists, when a script in
 the declared set is in no row, when a gate row is not in the gate list, when the counts are wrong, and when the security policy
-does not link the playbook or still holds a template placeholder. Its `--self-test` copies the tree and applies 16 mutations.
+does not link the playbook or still holds a template placeholder. Its `--self-test` copies the tree and applies one mutation at a time.
 
 ## C15 A clean-room consumer install
 

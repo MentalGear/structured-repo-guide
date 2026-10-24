@@ -9,8 +9,11 @@ not exact, unless a reasoned allowlist entry says why. No network, Python 3.11+ 
 Rules:
   package.json (dependencies, devDependencies, optionalDependencies; peerDependencies are a
     contract for consumers and are skipped)
-      exact `1.2.3` (a pre-release suffix is fine), `npm:alias@1.2.3`, or a local `workspace:`,
-      `file:`, `link:`, `portal:` spec. Ranges, tags, git, URL and tarball specs are red.
+      exact `1.2.3` (`=1.2.3` and `v1.2.3` mean the same; a pre-release suffix is fine),
+      `npm:alias@1.2.3`, a local `workspace:`, `file:`, `link:`, `portal:` spec, or a pnpm
+      `catalog:` / `catalog:NAME` reference (the version lives in `pnpm-workspace.yaml`, which is
+      checked below, and found automatically from the nearest one above the `package.json`).
+      Ranges, tags, git, URL and tarball specs are red.
       The override tables (`overrides`, nested ones included, `resolutions`, `pnpm.overrides`) are
       read the same way: an override replaces what a dependency asked for, so a range there
       re-opens every pin below it. `$name` references and `-` (remove) are fine.
@@ -27,14 +30,18 @@ Rules:
   Cargo.toml (dependencies, dev-dependencies, build-dependencies, workspace.dependencies, and
     the same under target.*)
       `=1.2.3`; `{ workspace = true }` and `{ path = ".." }` are fine; `git` needs a 40-hex `rev`;
-      anything else is red. `[patch.<source>]` and `[replace]` entries follow the same rules: a patch
+      anything else is red. A dependency that names an alternate source with `registry = "name"` or
+      `registry-index = "url"` is red unless the value is one of the `--cargo-registry` names you
+      allow (the one private registry your `.cargo/config.toml` defines). `[patch.<source>]` and `[replace]` entries follow the same rules: a patch
       with `git` and a `branch` replaces a pinned crate with whatever the branch points at. With `--cargo-lock Cargo.lock` (the library mode) a caret or bare
       `1.2.3` is also fine when it equals a version of that crate in the lock, so the floor a
       consumer may resolve is exactly the version the checks ran on.
   pnpm-workspace.yaml (`--pnpm-workspace FILE`, repeatable)
       `minimumReleaseAge` is at least `--min-release-age` minutes (default 43200, 30 days) and
       `onlyBuiltDependencies` is the explicit empty list `[]` (no dependency runs an install script).
-      An `overrides:` mapping, when present, must hold exact versions.
+      An `overrides:` mapping, a `catalog:` mapping and every mapping under `catalogs:`, when
+      present, must hold exact versions (one `name: version` per line; a `{ ... }` flow mapping
+      is not read). Quoted values (`"43200"`) and `[ ]` are read as the same values.
   Required settings (`--require-setting FILE:KEY=VALUE`, repeatable)
       FILE is relative to --root. A `.yaml`/`.yml` file is read for a top-level `key: value`,
       anything else (`.npmrc`) for a `key=value` line. Fails when the file or key is missing or
@@ -56,6 +63,7 @@ Usage:
   check-pins.py [--root DIR] [--allow FILE] [--cargo-lock FILE] [--pnpm-workspace FILE]...
                 [--min-release-age MINUTES] [--pip-require-hashes] [--npm FILE]... [--pip FILE]...
                 [--cargo FILE]... [--pyproject FILE]... [--require-setting FILE:KEY=VALUE]...
+                [--cargo-registry NAME]...
   With no --npm/--pip/--cargo/--pyproject, every package.json, requirements*.txt, Cargo.toml and
   pyproject.toml under --root is checked (node_modules, target, .git and virtualenvs skipped).
   check-pins.py --self-test        builds fixtures in a temp dir; every mutation must turn red.
@@ -91,9 +99,9 @@ def rel(root, path):
 def npm_spec_problem(spec):
     """Why an npm dependency spec is not an exact pin, or None when it is."""
     spec = str(spec).strip()
-    if re.fullmatch(SEMVER, spec):
+    if re.fullmatch(r"=?v?" + SEMVER, spec):
         return None
-    if re.match(r"(workspace|file|link|portal):", spec):
+    if re.match(r"(workspace|file|link|portal):", spec) or re.fullmatch(r"catalog:[\w@/.-]*", spec):
         return None
     if spec.startswith("npm:") and re.fullmatch(SEMVER, spec.rsplit("@", 1)[-1]):
         return None
@@ -117,6 +125,14 @@ def npm_override_problems(table, label, prefix=""):
         if why:
             out.append((where, f"{label}: {why}"))
     return out
+
+
+def uses_catalog(path):
+    """True when a package.json names a pnpm `catalog:` version anywhere in its dependency tables or overrides."""
+    try:
+        return re.search(r'"catalog:', open(path, encoding="utf-8").read()) is not None
+    except OSError:
+        return False
 
 
 def check_npm(path):
@@ -248,7 +264,7 @@ def dep_tables(doc):
         yield "replace", doc["replace"]
 
 
-def check_cargo(path, lock=None):
+def check_cargo(path, lock=None, registries=()):
     out = []
     try:
         doc = tomllib.load(open(path, "rb"))
@@ -261,6 +277,10 @@ def check_cargo(path, lock=None):
                 spec = {"version": spec}
             if spec.get("workspace") is True:
                 continue
+            for key in ("registry", "registry-index"):
+                if key in spec and str(spec[key]) not in registries:
+                    out.append((name, f"{where} names the source {key} = {str(spec[key])!r}; allow only the one private registry "
+                                      f"with --cargo-registry (or an allowlist entry with a reason)"))
             if "git" in spec:
                 if not re.fullmatch(r"[0-9a-f]{40}", str(spec.get("rev", ""))):
                     out.append((name, f"{where} git dependency needs `rev` = a 40-hex commit (a branch or tag can move)"))
@@ -286,38 +306,79 @@ def check_cargo(path, lock=None):
 
 # ---- pnpm-workspace.yaml ------------------------------------------------------------------------
 
-def check_pnpm(path, min_age):
-    out = []
-    try:
-        lines = open(path, encoding="utf-8").read().splitlines()
-    except OSError as err:
-        return [("<file>", f"cannot read: {err}")]
-    top, current, overrides = {}, None, {}
+def read_pnpm(path):
+    """(top-level keys, mappings) of a pnpm-workspace.yaml read line by line in block style.
+
+    top: key -> list of its inline value and `- item` lines, quotes removed. maps: `overrides` and
+    `catalog` -> {name: spec}; `catalogs` -> {catalog name: {name: spec}}."""
+    lines = open(path, encoding="utf-8").read().splitlines()
+    top, maps, current, sub = {}, {"overrides": {}, "catalog": {}, "catalogs": {}}, None, None
+    entry = re.compile(r"""^(\s+)("[^"]+"|'[^']+'|[^:\s][^:]*?)\s*:\s*(.*?)\s*(\s#.*)?$""")
     for l in lines:
         if not l.strip() or l.lstrip().startswith("#"):
             continue
         m = re.match(r"^([A-Za-z][\w-]*):\s*(.*?)\s*(#.*)?$", l)
         if m:
-            current = m.group(1)
-            top[current] = [m.group(2)] if m.group(2) else []
-        elif current == "overrides":
-            om = re.match(r"""^\s+("[^"]+"|'[^']+'|[^:\s][^:]*?)\s*:\s*(.*?)\s*(\s#.*)?$""", l)
+            current, sub = m.group(1), None
+            top[current] = [m.group(2).strip("\"'")] if m.group(2) else []
+        elif current in ("overrides", "catalog"):
+            om = entry.match(l)
             if om:
-                overrides[om.group(1).strip("\"'")] = om.group(2).strip().strip("\"'")
+                maps[current][om.group(2).strip("\"'")] = om.group(3).strip().strip("\"'")
+        elif current == "catalogs":
+            om = entry.match(l)
+            if om and not om.group(3):
+                sub = om.group(2).strip("\"'")
+                maps["catalogs"].setdefault(sub, {})
+            elif om and sub is not None:
+                maps["catalogs"][sub][om.group(2).strip("\"'")] = om.group(3).strip().strip("\"'")
         elif current and l.lstrip().startswith("- "):
             top[current].append(l.strip())
-    age = top.get("minimumReleaseAge")
-    if age is None:
-        out.append(("minimumReleaseAge", "is not set (a version published an hour ago can be installed)"))
-    elif not (len(age) == 1 and age[0].isdigit() and int(age[0]) >= min_age):
-        out.append(("minimumReleaseAge", f"is {age}, want an integer >= {min_age} minutes"))
-    built = top.get("onlyBuiltDependencies")
-    if built is None:
-        out.append(("onlyBuiltDependencies", "is not set; write the explicit empty list `[]`"))
-    elif built != ["[]"]:
-        out.append(("onlyBuiltDependencies", f"is {built}; the list must be empty (no dependency install scripts)"))
-    out += npm_override_problems(overrides, "overrides")
+    return top, maps
+
+
+def catalog_problems(maps):
+    out = npm_override_problems(maps["catalog"], "catalog")
+    for name, table in maps["catalogs"].items():
+        out += npm_override_problems(table, f"catalogs.{name}")
     return out
+
+
+def check_pnpm(path, min_age, release_rules=True):
+    out = []
+    try:
+        top, maps = read_pnpm(path)
+    except OSError as err:
+        return [("<file>", f"cannot read: {err}")]
+    if release_rules:
+        age = top.get("minimumReleaseAge")
+        if age is None:
+            out.append(("minimumReleaseAge", "is not set (a version published an hour ago can be installed)"))
+        elif not (len(age) == 1 and age[0].isdigit() and int(age[0]) >= min_age):
+            out.append(("minimumReleaseAge", f"is {age}, want an integer >= {min_age} minutes"))
+        built = top.get("onlyBuiltDependencies")
+        if built is not None and len(built) == 1:
+            built = [re.sub(r"\s+", "", built[0])]
+        if built is None:
+            out.append(("onlyBuiltDependencies", "is not set; write the explicit empty list `[]`"))
+        elif built != ["[]"]:
+            out.append(("onlyBuiltDependencies", f"is {built}; the list must be empty (no dependency install scripts)"))
+        out += npm_override_problems(maps["overrides"], "overrides")
+    out += catalog_problems(maps)
+    return out
+
+
+def nearest_workspace(root, manifest):
+    """The pnpm-workspace.yaml in the manifest's directory or the nearest one above it, not above root."""
+    d = os.path.dirname(os.path.abspath(manifest))
+    root = os.path.abspath(root)
+    while True:
+        f = os.path.join(d, "pnpm-workspace.yaml")
+        if os.path.isfile(f):
+            return f
+        if d == root or os.path.dirname(d) == d:
+            return None
+        d = os.path.dirname(d)
 
 
 def check_setting(root, spec):
@@ -381,7 +442,8 @@ def discover(root):
     return npm, pip, cargo, pyproject
 
 
-def run(root, npm, pip, cargo, pyproject, allow_path, lock_path, pnpm_paths, min_age, require_hashes=False, settings=()):
+def run(root, npm, pip, cargo, pyproject, allow_path, lock_path, pnpm_paths, min_age, require_hashes=False, settings=(),
+        registries=()):
     lock = locked_versions(lock_path) if lock_path else None
     found = []
     for p in npm:
@@ -389,11 +451,23 @@ def run(root, npm, pip, cargo, pyproject, allow_path, lock_path, pnpm_paths, min
     for p in pip:
         found += [(rel(root, p), n, m) for n, m in check_pip(p, require_hashes)]
     for p in cargo:
-        found += [(rel(root, p), n, m) for n, m in check_cargo(p, lock)]
+        found += [(rel(root, p), n, m) for n, m in check_cargo(p, lock, registries)]
     for p in pyproject:
         found += [(rel(root, p), n, m) for n, m in check_pyproject(p)]
     for p in pnpm_paths:
         found += [(rel(root, p), n, m) for n, m in check_pnpm(p, min_age)]
+    # A `catalog:` spec hides its version in pnpm-workspace.yaml: check the catalog it reads, even when
+    # that file was not passed for its release-age settings.
+    checked = {os.path.abspath(p) for p in pnpm_paths}
+    for p in npm:
+        if not uses_catalog(p):
+            continue
+        ws = nearest_workspace(root, p)
+        if ws is None:
+            found.append((rel(root, p), "catalog:", "a `catalog:` version, but no pnpm-workspace.yaml at or above it defines the catalog"))
+        elif ws not in checked:
+            checked.add(ws)
+            found += [(rel(root, ws), n, m) for n, m in check_pnpm(ws, 0, release_rules=False)]
     for spec in settings:
         found += [(spec.split(":", 1)[0], n, m) for n, m in check_setting(root, spec)]
     entries, problems = load_allow(allow_path)
@@ -407,7 +481,7 @@ def run(root, npm, pip, cargo, pyproject, allow_path, lock_path, pnpm_paths, min
     for i, (ep, en, reason) in enumerate(entries):
         if i not in used:
             problems.append(f"{allow_path}: stale entry `{ep}|{en}`: it matches no violation, delete it")
-    n_files = len(npm) + len(pip) + len(cargo) + len(pyproject) + len(pnpm_paths) + len(set(x.split(':', 1)[0] for x in settings))
+    n_files = len(npm) + len(pip) + len(cargo) + len(pyproject) + len(checked) + len(set(x.split(':', 1)[0] for x in settings))
     return problems, len(found), len(used), n_files
 
 
@@ -436,7 +510,8 @@ def self_test():
     cases_run = 0
     bad = 0
 
-    def case(name, want, files=None, allow=None, lock=False, pnpm=("js/pnpm-workspace.yaml",), hashes=False, settings=()):
+    def case(name, want, files=None, allow=None, lock=False, pnpm=("js/pnpm-workspace.yaml",), hashes=False, settings=(),
+             registries=()):
         nonlocal cases_run, bad
         cases_run += 1
         tmp = tempfile.mkdtemp(prefix="pins-selftest-")
@@ -452,7 +527,7 @@ def self_test():
             npm, pip, cargo, pyproject = discover(tmp)
             problems, *_ = run(tmp, npm, pip, cargo, pyproject, ap,
                                os.path.join(tmp, "rust/Cargo.lock") if lock else None,
-                               [os.path.join(tmp, f) for f in pnpm], 43200, hashes, settings)
+                               [os.path.join(tmp, f) for f in pnpm], 43200, hashes, settings, registries)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
         ok = (not problems) if want is None else any(want in p for p in problems)
@@ -538,6 +613,37 @@ def self_test():
     case("a required .npmrc setting that holds is green", None, {"js/.npmrc": "# exact\nsave-exact=true\n"},
          settings=("js/.npmrc:save-exact=true",))
     case("a required .npmrc file that is missing", "does not exist", settings=("js/.npmrc:save-exact=true",))
+    # npm spellings of an exact version, pnpm catalogs, quoted and spaced pnpm settings, Cargo registries
+    case("npm `=1.2.3` and `v1.2.3` are exact", None, npm_with(left="=1.2.3", right="v4.5.6"))
+    case("npm `^v1.2.3` is a range", "is not an exact version", npm_with(left="^v1.2.3"))
+    case("a catalog: reference whose catalog is exact is green", None,
+         {**npm_with(left="catalog:", right="catalog:react18"),
+          "js/pnpm-workspace.yaml": "minimumReleaseAge: 43200\nonlyBuiltDependencies: []\ncatalog:\n  left: 1.2.3\n"
+                                    "catalogs:\n  react18:\n    right: 18.3.1\n"})
+    case("a catalog entry that is a range", "catalog: ",
+         {**npm_with(left="catalog:"),
+          "js/pnpm-workspace.yaml": "minimumReleaseAge: 43200\nonlyBuiltDependencies: []\ncatalog:\n  left: ^1.2.3\n"})
+    case("a named catalog entry that is a tag", "catalogs.react18",
+         {**npm_with(right="catalog:react18"),
+          "js/pnpm-workspace.yaml": "minimumReleaseAge: 43200\nonlyBuiltDependencies: []\ncatalogs:\n  react18:\n    right: latest\n"})
+    case("a catalog read from a workspace file that was not passed", "catalog: ",
+         {**npm_with(left="catalog:"), "js/pnpm-workspace.yaml": "catalog:\n  left: '>=1'\n"}, pnpm=())
+    case("a catalog: reference with no workspace file at all", "no pnpm-workspace.yaml",
+         {"app/package.json": json.dumps({"dependencies": {"left": "catalog:"}})}, pnpm=())
+    case("a quoted release age and a spaced empty list are green", None,
+         {"js/pnpm-workspace.yaml": 'minimumReleaseAge: "43200"\nonlyBuiltDependencies: [ ]\n'})
+    case("a quoted release age that is too low", "minimumReleaseAge",
+         {"js/pnpm-workspace.yaml": "minimumReleaseAge: '10'\nonlyBuiltDependencies: []\n"})
+    case("an install-script list in flow style with an entry", "onlyBuiltDependencies",
+         {"js/pnpm-workspace.yaml": "minimumReleaseAge: 43200\nonlyBuiltDependencies: [esbuild]\n"})
+    case("cargo dependency naming an unlisted registry", "names the source registry = 'evil'",
+         {"rust/Cargo.toml": '[dependencies]\nserde = { version = "=1.0.200", registry = "evil" }\n'})
+    case("cargo dependency naming a registry index", "registry-index",
+         {"rust/Cargo.toml": '[dependencies]\nserde = { version = "=1.0.200", registry-index = "https://evil.example/index" }\n'})
+    case("cargo dependency naming the allowed registry is green", None,
+         {"rust/Cargo.toml": '[dependencies]\nserde = { version = "=1.0.200", registry = "mine" }\n'}, registries=("mine",))
+    case("cargo dependency naming another registry than the allowed one", "registry = 'evil'",
+         {"rust/Cargo.toml": '[dependencies]\nserde = { version = "=1.0.200", registry = "evil" }\n'}, registries=("mine",))
     case("an allowlisted violation is green", None, npm_with(left="^1.2.3"),
          allow="# reason is mandatory\njs/package.json|left|vendor publishes only ranges; replace by Q3\n")
     case("an allowlist entry that matches nothing is stale", "stale entry", None,
@@ -565,6 +671,8 @@ def main():
     ap.add_argument("--pyproject", action="append", default=[])
     ap.add_argument("--require-setting", action="append", default=[], metavar="FILE:KEY=VALUE",
                     help="a setting that must hold in FILE (yaml top level or key=value), repeatable")
+    ap.add_argument("--cargo-registry", action="append", default=[], metavar="NAME",
+                    help="a registry name (or index URL) a Cargo dependency may name with `registry`/`registry-index`, repeatable")
     ap.add_argument("--self-test", action="store_true")
     a = ap.parse_args()
     if a.self_test:
@@ -577,7 +685,7 @@ def main():
         npm, pip, cargo, pyproject = discover(root)
     problems, n_found, n_allowed, n_files = run(root, npm, pip, cargo, pyproject, j(a.allow), j(a.cargo_lock),
                                                 [j(p) for p in a.pnpm_workspace], a.min_release_age, a.pip_require_hashes,
-                                                a.require_setting)
+                                                a.require_setting, tuple(a.cargo_registry))
     if problems:
         print("check-pins: FAIL", file=sys.stderr)
         for p in problems:
