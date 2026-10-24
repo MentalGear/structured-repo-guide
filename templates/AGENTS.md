@@ -25,8 +25,9 @@ check never needs an edit to this file.
   (`--fast`, `--only`) is not a pass. What each check enforces is [`docs/checks.md`](./docs/checks.md), generated from the
   gate list and the script headers. A new check: write its header, add one line to `scripts/gates.list`, run
   `python3 -I scripts/docs_catalogue.py --write`; no other doc is edited.
-- **Comments describe the current state.** A reason, in present tense, plus the item id. History (dates, commit hashes,
-  "used to", incident stories) goes to the item and is linked, not retold. Rule and examples:
+- **Code describes only its current state.** A comment, test name or user-visible string gives a reason, in present
+  tense, plus the item id. History (dates, commit hashes, "used to", incident stories, which agent or round found it)
+  is written straight into the item, or the archive for a long note, and is linked, never retold in the code. Rule and examples:
   [`docs/guides/history-in-comments.md`](./docs/guides/history-in-comments.md).
 - **When the same problem shows up twice, stop patching instances.** Find the root cause and fix the class by
   construction: a check that makes it unable to recur. Existing debt goes in a shrink-only baseline.
